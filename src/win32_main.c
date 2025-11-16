@@ -35,12 +35,23 @@ struct OS_W32_Window
     HDC hdc;
 };
 
-static i32 horz_res = 800;
-static i32 vert_res = 600;
+#define global        static
+#define internal      static
+#define local_persist static
+
+typedef struct Software_Render_Buffer Software_Render_Buffer;
+struct Software_Render_Buffer
+{
+    i32 width;
+    i32 height;
+    BITMAPINFO info;
+    u32 *data;
+};
+
+global Software_Render_Buffer *buffer;
 static HWND hwnd;
 static HDC hdc;
-static u32 *buffer;
-static BITMAPINFO bitmap_info;
+#include "game.c"
 
 LRESULT MainWndProc(
     HWND hwnd,        // handle to window
@@ -104,23 +115,6 @@ void win32_process_pending_msgs()
     }
 }
 
-static void draw_rectangle(u32 *buffer, f32 x, f32 y, f32 width, f32 height, u32 color)
-{
-	u32 x_min = (u32)roundf(x);
-	u32 x_max = x_min + (u32)roundf(width);
-	u32 y_min = (u32)roundf(y);
-	u32 y_max = y_min + (u32)roundf(height);
-	u32 *ptr = buffer + y_min * horz_res + x_min;
-	for(u32 y = y_min; y < y_max; y++)
-	{
-		u32* row = ptr;
-		for(u32 x = x_min; x < x_max; x++)
-		{
-			*row++ = color;
-		}
-		ptr += horz_res;
-	}
-}
 
 int main ()
 {
@@ -172,38 +166,32 @@ int main ()
     ///// fuck off
 
     i32 numcolors = GetDeviceCaps(hdc, NUMCOLORS);
-    HBITMAP bitmap_handle = CreateCompatibleBitmap(hdc, horz_res, vert_res);
-    buffer = VirtualAlloc(0, sizeof(u32) * horz_res * vert_res, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    buffer = VirtualAlloc(0, sizeof(Software_Render_Buffer), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    buffer->width = 800;
+    buffer->height = 600;
+    buffer->data = VirtualAlloc(0, sizeof(u32) * buffer->width * buffer->height, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     
-    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	bitmap_info.bmiHeader.biWidth = horz_res;
-	bitmap_info.bmiHeader.biHeight = -vert_res;
-	bitmap_info.bmiHeader.biPlanes = 1;
-	bitmap_info.bmiHeader.biBitCount = sizeof(u32) * 8;
-	bitmap_info.bmiHeader.biCompression = BI_RGB;
-	bitmap_info.bmiHeader.biSizeImage = 0;
-	bitmap_info.bmiHeader.biXPelsPerMeter = 0;
-	bitmap_info.bmiHeader.biYPelsPerMeter = 0;
-	bitmap_info.bmiHeader.biClrUsed = 0;
-	bitmap_info.bmiHeader.biClrImportant = 0;
+    buffer->info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	buffer->info.bmiHeader.biWidth = buffer->width;
+	buffer->info.bmiHeader.biHeight = -buffer->height;
+	buffer->info.bmiHeader.biPlanes = 1;
+	buffer->info.bmiHeader.biBitCount = sizeof(u32) * 8;
+	buffer->info.bmiHeader.biCompression = BI_RGB;
+	buffer->info.bmiHeader.biSizeImage = 0;
+	buffer->info.bmiHeader.biXPelsPerMeter = 0;
+	buffer->info.bmiHeader.biYPelsPerMeter = 0;
+	buffer->info.bmiHeader.biClrUsed = 0;
+	buffer->info.bmiHeader.biClrImportant = 0;
+
 
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
-
-
-    //if(GetDIBits(hdc, bitmap_handle, 0, 0, (void*)buffer, &bitmap_info, DIB_RGB_COLORS) == ERROR_INVALID_PARAMETER)
-    {
-        int x = 1231;
-    }
-
-    ////////
+    
     while(g_running)
     {
-        draw_rectangle(buffer, 0, 0, horz_res, vert_res, 0xff007f00);
-        draw_rectangle(buffer, 100, 100, 50, 50, 0xffffff00);
         win32_process_pending_msgs();
-        StretchDIBits(hdc, 0, 0, 800, 600, 0, 0, horz_res, vert_res, (void*) buffer, &bitmap_info, DIB_RGB_COLORS, SRCCOPY);
-        int x = 123;
+        game_update_and_render(buffer);
+        StretchDIBits(hdc, 0, 0, 800, 600, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
     }
 }
