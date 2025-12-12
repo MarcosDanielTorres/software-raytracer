@@ -1,22 +1,6 @@
-#include <stdio.h>
-#include <stdint.h>
-#include <math.h>
 #include <windows.h>
+#include "win32_main.h"
 
-typedef int8_t i8;
-typedef int16_t i16;
-typedef int32_t i32;
-typedef int64_t i64;
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-
-typedef float f32;
-typedef double f64;
-
-typedef uint32_t b32;
 
 static b32 g_running = 1;
 
@@ -35,23 +19,9 @@ struct OS_W32_Window
     HDC hdc;
 };
 
-#define global        static
-#define internal      static
-#define local_persist static
-
-typedef struct Software_Render_Buffer Software_Render_Buffer;
-struct Software_Render_Buffer
-{
-    i32 width;
-    i32 height;
-    BITMAPINFO info;
-    u32 *data;
-};
-
 global Software_Render_Buffer *buffer;
 static HWND hwnd;
 static HDC hdc;
-#include "game.c"
 
 LRESULT MainWndProc(
     HWND hwnd,        // handle to window
@@ -188,10 +158,17 @@ int main ()
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
     
+    wchar_t engine_absolute_path[MAX_PATH];
+    u32 len = GetModuleFileNameW(0, engine_absolute_path, MAX_PATH);
+
+    HMODULE dll_handle = LoadLibraryExW(L"E:\\software-raytracer\\build\\game.dll", 0, 0);
+    Game_Update_And_Render* app_update_and_render = (Game_Update_And_Render*) GetProcAddress(dll_handle, "game_update_and_render");
+
     while(g_running)
     {
         win32_process_pending_msgs();
-        game_update_and_render(buffer);
+        //game_update_and_render(buffer);
+        app_update_and_render(buffer);
         StretchDIBits(hdc, 0, 0, 800, 600, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
     }
 }

@@ -1,3 +1,5 @@
+#include "win32_main.h"
+
 static void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 width, f32 height, u32 color)
 {
 	u32 x_min = (u32)roundf(x);
@@ -17,7 +19,7 @@ static void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 wid
 	}
 }
 
-void game_update_and_render(Software_Render_Buffer *buffer)
+foo(game_update_and_render)
 {
     draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff007f00);
     draw_rectangle(buffer, 120, 100, 50, 50, 0xffffff00);
