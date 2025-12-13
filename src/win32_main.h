@@ -23,6 +23,10 @@ typedef uint32_t b32;
 #define internal      static
 #define local_persist static
 
+#define kb(value) (value * 1024)
+#define mb(value) (kb(value) * 1024)
+#define gb(value) (mb(value) * 1024)
+
 typedef struct Software_Render_Buffer Software_Render_Buffer;
 struct Software_Render_Buffer
 {
@@ -32,5 +36,9 @@ struct Software_Render_Buffer
     u32 *data;
 };
 
-#define foo(name) void name(Software_Render_Buffer *buffer)
-typedef foo(Game_Update_And_Render);
+#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer)
+typedef UPDATE_AND_RENDER(Update_And_Render);
+UPDATE_AND_RENDER(update_and_render_stub)
+{
+
+}

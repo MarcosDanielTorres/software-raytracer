@@ -19,8 +19,8 @@ static void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 wid
 	}
 }
 
-foo(game_update_and_render)
+UPDATE_AND_RENDER(update_and_render)
 {
-    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff007f00);
+    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xfff00fff);
     draw_rectangle(buffer, 120, 100, 50, 50, 0xffffff00);
 }
