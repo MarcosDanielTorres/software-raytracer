@@ -1,4 +1,6 @@
-#include "win32_main.h"
+#include "base_core.h"
+#include "base_os.h"
+#include "platform.h"
 
 static void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 width, f32 height, u32 color)
 {
@@ -21,6 +23,6 @@ static void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 wid
 
 UPDATE_AND_RENDER(update_and_render)
 {
-    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xfff00fff);
-    draw_rectangle(buffer, 120, 100, 50, 50, 0xffffff00);
+    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff111f0f);
+    draw_rectangle(buffer, 120, 130, 50, 50, 0xffffff00);
 }

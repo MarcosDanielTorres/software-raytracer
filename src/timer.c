@@ -1,5 +1,3 @@
-LONGLONG timer_frequency = {0};
-
 static LONGLONG timer_get_os_freq() {
     LARGE_INTEGER frequency;
 	QueryPerformanceFrequency(&frequency);

@@ -1,26 +1,19 @@
-#include <windows.h>
-#include "win32_main.h"
+#include "base_core.h"
+#include "base_os.h"
+#include "timer.h"
+#include "timer.c"
+#include "platform.h"
+#include "os_win32.h"
+#include "os_win32.c"
 
 #include "base_arena.h"
 #include "base_string.h"
 
 #include "base_arena.c"
 #include "base_string.c"
-#include "timer.c"
+
 
 global Arena *arena;
-
-typedef struct Win32LoadedDLL Win32LoadedDLL;
-struct Win32LoadedDLL
-{
-    HANDLE handle;
-    u8* name;
-    u8* name_temp;
-    u8* lock_filename;
-    Update_And_Render *app_update_and_render;
-    FILETIME last_write_time;
-    b32 is_valid;
-};
 
 static b32 g_running = 1;
 
@@ -97,61 +90,6 @@ void win32_process_pending_msgs()
             } break;
         }
     }
-}
-
-internal WIN32_FIND_DATAA
-win32_get_file_attributes(u8* filename)
-{
-    WIN32_FIND_DATAA result = {0};
-    GetFileAttributesEx(filename, GetFileExInfoStandard, &result);
-    return result;
-}
-
-internal void
-win32_load_dll(Win32LoadedDLL *dll)
-{
-    WIN32_FIND_DATAA ignored;
-    {
-        WIN32_FIND_DATAA file_data;
-        if(GetFileAttributesEx(dll->name, GetFileExInfoStandard, &file_data))
-        {
-            dll->last_write_time = file_data.ftLastWriteTime;
-        }
-        for(u32 attempt_index = 0; attempt_index < 10000; attempt_index++)
-        {
-
-            if(CopyFile(dll->name, dll->name_temp, FALSE))
-            {
-                break;
-            }
-            else
-            {
-                printf("Failed to copy file, retrying...\n");
-            }
-        }
-
-        dll->handle = LoadLibraryExA(dll->name_temp, 0, 0);
-        if(dll->handle)
-        {
-            dll->app_update_and_render = (Update_And_Render*) GetProcAddress(dll->handle, "update_and_render");
-            dll->is_valid = dll->app_update_and_render != 0;
-        }
-        if (!dll->handle || !dll->app_update_and_render)
-        {
-            printf("Defaulting to stub...\n");
-            dll->app_update_and_render = update_and_render_stub;
-        }
-    }
-}
-
-internal void
-win32_unload_dll(Win32LoadedDLL *dll)
-{
-    if (dll->handle)
-        FreeLibrary(dll->handle);
-    dll->handle = 0;
-    dll->app_update_and_render = 0;
-    dll->is_valid = 0;
 }
 
 int main ()
@@ -232,33 +170,20 @@ int main ()
         absolute_path = str8_strip_last(absolute_path, str8_literal("\\"));
     }
 
-
     u8* dll_name = cstring_from_str8(arena, str8_concat(arena, absolute_path, str8_literal("\\game")));
 
-    Win32LoadedDLL game_dll = {0};
+    OS_LoadedDLL game_dll = {0};
     game_dll.name = cstring_concat(arena, dll_name, ".dll");
     game_dll.name_temp = cstring_concat(arena, dll_name, "-temp.dll");
     game_dll.lock_filename = cstring_concat(arena, dll_name, "-lock.temp");
 
-    win32_load_dll(&game_dll);
+    os_load_dll(&game_dll);
 
     while(g_running)
     {
         win32_process_pending_msgs();
 
-        WIN32_FIND_DATAA file_data = win32_get_file_attributes(game_dll.name);
-        if(CompareFileTime(&file_data.ftLastWriteTime, &game_dll.last_write_time) != 0)
-        {
-            WIN32_FIND_DATAA ignored;
-            if(!GetFileAttributesEx(game_dll.lock_filename, GetFileExInfoStandard, &ignored))
-            {
-                LONGLONG start_time = timer_get_os_time();
-                win32_unload_dll(&game_dll);
-                win32_load_dll(&game_dll);
-                LONGLONG end_time = timer_get_os_time();
-                printf("[Hot-Reloading] %s: took: %.2f ms\n", game_dll.name, timer_os_time_to_ms(end_time - start_time));
-            }
-        }
+        os_perform_hot_reload(&game_dll);
         game_dll.app_update_and_render(buffer);
         StretchDIBits(hdc, 0, 0, 800, 600, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
     }
