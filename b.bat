@@ -12,5 +12,5 @@ call cl -FC -nologo -WX -Od -Z7 -LDd ..\src\game.c /link -incremental:no -opt:re
 del game-lock.temp
 
 echo Compiling engine
-call cl -FC -nologo -WX -Od -Z7 ..\src\win32_main.c /link -incremental:no -opt:ref user32.lib gdi32.lib
+call cl -FC -nologo -WX -Od -Z7 ..\src\main.c /link -incremental:no -opt:ref user32.lib gdi32.lib
 popd build

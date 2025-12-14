@@ -12,7 +12,6 @@
 #include "base_arena.c"
 #include "base_string.c"
 
-
 global Arena *arena;
 
 static b32 g_running = 1;
@@ -97,8 +96,21 @@ int main ()
     timer_init();
     arena = arena_alloc(mb(2));
     g_transient_arena = arena_alloc(mb(2));
-    i32 window_width = 1920;
-    i32 window_height = 1080;
+    // 4:3 resolutions
+    // 640 x 480    (VGA)
+    // 800 x 600    (SVGA)
+    // 1024 x 768   (XGA)
+    // 1280 x 960
+    // 1400 x 1050
+    // 1600 x 1200  (UXGA)
+    // 1920 x 1440
+    i32 window_width = 800; 
+    i32 window_height = 600;
+    window_width = 1280; 
+    window_height = 960;
+
+    i32 buffer_width = 640;
+    i32 buffer_height = 480;
     WNDCLASSEXW wnd_class = 
     {
         .cbSize = sizeof(WNDCLASSEXW),
@@ -111,7 +123,7 @@ int main ()
     RECT window_rect = {0, 0, window_width, window_height};
     u32 screen_width = GetSystemMetrics(SM_CXSCREEN);
     u32 screen_height = GetSystemMetrics(SM_CYSCREEN);
-    #if 0
+    #if 1
     SetRect(&window_rect,
             (screen_width / 2) - (window_width / 2),
             (screen_height / 2) - (window_height / 2),
@@ -128,7 +140,16 @@ int main ()
     {
         window_rect.top = CW_USEDEFAULT;
     }
-    hwnd = CreateWindowExW(WS_EX_APPWINDOW, L"graphical-window", L"My window!", WS_OVERLAPPEDWINDOW, window_rect.left, window_rect.top, window_rect.right - window_rect.left, window_rect.bottom - window_rect.top, 0, 0, 0, 0);
+
+    hwnd = CreateWindowExW(
+        WS_EX_APPWINDOW,
+        L"graphical-window",
+        L"My window!",
+        WS_OVERLAPPEDWINDOW,
+        window_rect.left, window_rect.top, window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
+        0, 0, 0, 0
+    );
+
     if(!hwnd)
     {
         printf("error code: %d\n", GetLastError());
@@ -141,8 +162,8 @@ int main ()
 
 
     buffer = VirtualAlloc(0, sizeof(Software_Render_Buffer), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    buffer->width = 800;
-    buffer->height = 600;
+    buffer->width = buffer_width;
+    buffer->height = buffer_height;
     buffer->data = VirtualAlloc(0, sizeof(u32) * buffer->width * buffer->height, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     
     buffer->info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -156,7 +177,6 @@ int main ()
 	buffer->info.bmiHeader.biYPelsPerMeter = 0;
 	buffer->info.bmiHeader.biClrUsed = 0;
 	buffer->info.bmiHeader.biClrImportant = 0;
-
 
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
@@ -179,12 +199,19 @@ int main ()
 
     os_load_dll(&game_dll);
 
+    LONGLONG last_time = timer_get_os_time();
     while(g_running)
     {
+        LONGLONG now = timer_get_os_time();
+        LONGLONG dt = now - last_time;
+        last_time = now;
+        // ver sie lafrican head tarda 15 en debug tambien en tinyrenderr project
+        printf("%2.fms\n", timer_os_time_to_ms(dt));
         win32_process_pending_msgs();
 
         os_perform_hot_reload(&game_dll);
         game_dll.app_update_and_render(buffer);
-        StretchDIBits(hdc, 0, 0, 800, 600, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
+        //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
+        StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
     }
 }

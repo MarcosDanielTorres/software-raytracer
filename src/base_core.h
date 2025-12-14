@@ -25,3 +25,10 @@ typedef uint32_t b32;
 #define kb(value) (value * 1024)
 #define mb(value) (kb(value) * 1024)
 #define gb(value) (mb(value) * 1024)
+
+#define Min(a, b) (a < b ? (a) : (b))
+#define Max(a, b) (a > b ? (a) : (b))
+#define Sign(type, x) (((type)(x > 0)) - ((type)(x) < 0))
+#define ClampBot(a, b) (Max(a, b))
+#define ClampTop(a, b) (Min(a, b))
+#define Clamp(a, b, c) (ClampTop(ClampBot(a, b), c))
