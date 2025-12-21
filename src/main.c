@@ -1,10 +1,9 @@
 #include "base_core.h"
 #include "base_os.h"
-#include "timer.h"
-#include "timer.c"
-#include "platform.h"
 #include "os_win32.h"
+#include "timer.h"
 #include "os_win32.c"
+#include "timer.c"
 
 #include "base_arena.h"
 #include "base_string.h"
@@ -15,15 +14,6 @@
 global Arena *arena;
 
 static b32 g_running = 1;
-
-typedef struct OS_W32_Window OS_W32_Window;
-struct OS_W32_Window
-{
-    OS_W32_Window *next;
-    OS_W32_Window *prev;
-    HWND hwnd;
-    HDC hdc;
-};
 
 global Software_Render_Buffer *buffer;
 static HWND hwnd;
@@ -67,6 +57,7 @@ void win32_process_pending_msgs()
             {
                 g_running = 0;
             } break;
+            #if 0
             case WM_MOUSEMOVE:
             {
                 // TODO move to obsidian!
@@ -83,6 +74,7 @@ void win32_process_pending_msgs()
                 printf("MOUSE MOVE: x: %d, y: %d\n", xPos, yPos);
 
             } break;
+            #endif
             default:
             {
                 DispatchMessageA(&Message);
@@ -108,9 +100,15 @@ int main ()
     i32 window_height = 600;
     window_width = 1280; 
     window_height = 960;
+    window_width = 1400; 
+    window_height = 1050;
+    window_width = 1920; 
+    window_height = 1080;
 
     i32 buffer_width = 640;
     i32 buffer_height = 480;
+    //buffer_width = 1920;
+    //buffer_height = 1080;
     WNDCLASSEXW wnd_class = 
     {
         .cbSize = sizeof(WNDCLASSEXW),
@@ -123,7 +121,7 @@ int main ()
     RECT window_rect = {0, 0, window_width, window_height};
     u32 screen_width = GetSystemMetrics(SM_CXSCREEN);
     u32 screen_height = GetSystemMetrics(SM_CYSCREEN);
-    #if 1
+    #if 0
     SetRect(&window_rect,
             (screen_width / 2) - (window_width / 2),
             (screen_height / 2) - (window_height / 2),
@@ -200,17 +198,19 @@ int main ()
     os_load_dll(&game_dll);
 
     LONGLONG last_time = timer_get_os_time();
+    LONGLONG total_time = 0;
     while(g_running)
     {
         LONGLONG now = timer_get_os_time();
         LONGLONG dt = now - last_time;
+        total_time += dt;
         last_time = now;
         // ver sie lafrican head tarda 15 en debug tambien en tinyrenderr project
-        printf("%2.fms\n", timer_os_time_to_ms(dt));
+        //printf("%.2fms\n", timer_os_time_to_ms(dt));
         win32_process_pending_msgs();
 
         os_perform_hot_reload(&game_dll);
-        game_dll.app_update_and_render(buffer);
+        game_dll.app_update_and_render(buffer, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
         StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
     }

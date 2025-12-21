@@ -1,21 +1,23 @@
 #pragma once
-typedef struct OS_LoadedDLL OS_LoadedDLL;
-struct OS_LoadedDLL
+#include <windows.h>
+
+struct Software_Render_Buffer
 {
-    OS_Handle handle;
-    u8* name;
-    u8* name_temp;
-    u8* lock_filename;
-    Update_And_Render *app_update_and_render;
-    u64 last_write_time;
-    b32 is_valid;
+    i32 width;
+    i32 height;
+    BITMAPINFO info;
+    u32 *data;
+};
+
+typedef struct OS_W32_Window OS_W32_Window;
+struct OS_W32_Window
+{
+    OS_W32_Window *next;
+    OS_W32_Window *prev;
+    HWND hwnd;
+    HDC hdc;
 };
 
 // --- win32 ---
 internal WIN32_FIND_DATAA win32_get_file_attributes(u8* filename);
 internal u64 win32_filetime_to_u64(FILETIME time);
-
-
-internal void os_load_dll(OS_LoadedDLL *dll);
-internal void os_unload_dll(OS_LoadedDLL *dll);
-internal void os_perform_hot_reload(OS_LoadedDLL *dll);
