@@ -7,6 +7,8 @@
 #include "timer.c"
 #include <assert.h>
 
+#define PREVIOUS_MISCONCEPTIONS 1
+#define ROTATION 1
 
 typedef struct Face Face;
 struct Face
@@ -793,6 +795,21 @@ UPDATE_AND_RENDER(update_and_render)
         printf("Entity count: %d\n", entity_count);
 
         time_context = (TimeContext*)malloc(sizeof(TimeContext));
+        #if PREVIOUS_MISCONCEPTIONS
+            const char *msg = "Problem: Perspective Projection misunderstanding:\n I though that every coordinate, after applying the perspective projection will be inside the NDC space, which is not true, as only applies to points inside the view frustum.\n"
+            "\"The x and y coordinates of any point inside the view frustum both fall into the range [-1, 1 ] in the canonical view volume, and the z coordinates between the near and far planes are mapped to the range [0, 1]. These are called normalized device coordinates, and they are later scaled to the dimensions of the frame buffer by the viewport transform.\" -Eric Lengyel"
+            "\n\n"
+
+            "Example code:\n"
+            "... after perspective projection, and then perspective divide I thought this assets would always hold\n"
+            "assert(transformed_v0.x >= -1.000001 && transformed_v0.x <= 1.000001);\n"
+            "assert(transformed_v0.y >= -1.000001 && transformed_v0.y <= 1.000001);\n"
+            "assert(transformed_v0.z >= -NDC_EPSILON && transformed_v0.z <= 1.0f + NDC_EPSILON);\n\n"
+            "... the remaining points\n";
+
+            printf("%s\n", msg);
+
+        #endif
         init = 1;
     }
     u32 black = 0xff000000;
@@ -836,7 +853,7 @@ UPDATE_AND_RENDER(update_and_render)
     // rolled perspective
 
     Mat4 view = mat4_look_at(camera_eye, camera_target, (Vec3) {0, 1, 0});
-    view = mat4_identity();
+    //view = mat4_identity();
     
     LONGLONG model_now = timer_get_os_time();
 	f32 c = cos(angle);
@@ -854,7 +871,7 @@ UPDATE_AND_RENDER(update_and_render)
             {
                 for(int face_index = 1; face_index <= model->faces_count; face_index++)
                 {
-                    u32 color = green;
+                    u32 color = blue;
                     Face face = model->faces[face_index];
                     Vec3 v0 = model->points[face.v[0]];
                     Vec3 v1 = model->points[face.v[1]];
@@ -868,6 +885,7 @@ UPDATE_AND_RENDER(update_and_render)
                     }
 
 
+                    #if ROTATION
                     if(model == &model_f117)
                     {
 
@@ -878,9 +896,6 @@ UPDATE_AND_RENDER(update_and_render)
                         v0 = point_rotate_y(v0, c, s);
                         v1 = point_rotate_y(v1, c, s);
                         v2 = point_rotate_y(v2, c, s);
-
-
-
                     }
                     else
                     {
@@ -888,6 +903,7 @@ UPDATE_AND_RENDER(update_and_render)
 						v1 = point_rotate_y(v1, c, s);
 						v2 = point_rotate_y(v2, c, s);
                     }
+                    #endif
                     
                     // World space
                     v0 = point_scalar(v0, 0.2f);
@@ -933,12 +949,12 @@ UPDATE_AND_RENDER(update_and_render)
                     if(N.z >= 0 )
                     {
                         // cull
-                        color = blue;
+                        //color = blue;
                         continue;
                     }
                     else
                     {
-                        color = green;
+                        //color = green;
                     }
 
 
@@ -959,6 +975,9 @@ UPDATE_AND_RENDER(update_and_render)
                     
                     #if 1
                     {
+                        // remember that the projection matrix stores de viewspace z value in its w
+                        // but the result vector is in clip space so z is in clip space, not in 
+                        // viewspace, they are not the same zz
                         transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
                         transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
                         transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
@@ -983,6 +1002,8 @@ UPDATE_AND_RENDER(update_and_render)
                             transformed_v2.y /= transformed_v2.w;
                             transformed_v2.z /= transformed_v2.w;
                         }
+
+
                     }
                     #else
                     f32 w_v0 = transformed_v0.z;

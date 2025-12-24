@@ -1,4 +1,5 @@
 #pragma once
+#define EPSILON 1e-5f
 typedef struct Vec4 Vec4;
 struct Vec4
 {
@@ -63,7 +64,7 @@ inline Vec3 vec3_normalize(Vec3 a)
 {
     Vec3 result = { 0};
     f32 magnitude = vec3_magnitude_squared(a);
-    if(magnitude > 1e-12f)
+    if(magnitude > EPSILON)
     {
         f32 denominator = (1.0f / sqrtf(magnitude));
         result.x = a.x * denominator;
@@ -137,7 +138,6 @@ Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
 }
 
 Mat4 mat4_look_at(Vec3 eye, Vec3 target, Vec3 up) {
-    // Compute the forward (z), right (x), and up (y) vectors
     Vec3 z = vec3_sub(target, eye);
     z = vec3_normalize(z);
     Vec3 x = vec3_cross(up, z);
