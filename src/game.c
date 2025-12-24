@@ -1111,9 +1111,9 @@ UPDATE_AND_RENDER(update_and_render)
             //Vec4 v1_v4 = (Vec4) {-0.4, 0.5, 1.2, 1.0f};
             //Vec4 v2_v4 = (Vec4) {-0.6, 0.2, 1.0, 1.0f};
             //center at origin
-            Vec4 v0_v4 = (Vec4) {0.0,  0.6, 100.0, 1.0f};
-            Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 2.0, 1.0f};
-            Vec4 v2_v4 = (Vec4) {0.6, -0.4, 2.0, 1.0f};
+            Vec4 v0_v4 = (Vec4) {0.0,  0.6, 35.0, 1.0f};
+            Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
+            Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
 
             v0_v4 = mat4_mul_vec4(view, v0_v4);
             v1_v4 = mat4_mul_vec4(view, v1_v4);

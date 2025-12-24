@@ -87,18 +87,22 @@
   precision highp float;
 
   layout(location=0) in vec3 aPos;
+  layout(location=1) in vec4 aColor;
 
   uniform mat4 uMVP;
+  out vec4 OutColor;
 
   void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
+    OutColor = aColor;
   }`;
 
   const fs = `#version 300 es
   precision highp float;
+  in vec4 OutColor;
   out vec4 oColor;
   void main() {
-    oColor = vec4(1.0, 1.0, 1.0, 1.0);
+    oColor = OutColor;
   }`;
 
   function compile(type, src) {
@@ -133,9 +137,9 @@
   //]);
   //center at origin
   const verts = new Float32Array([
-     0.0,  0.6, -100.0,
-    -0.6, -0.4, -1.0,
-     0.6, -0.4, -1.0,
+     0.0,  0.6, -35.0, 1.0, 0.0, 0.0, 1.0,
+    -0.6, -0.4, -1.0, 0.0, 1.0, 0.0, 1.0,
+     0.6, -0.4, -1.0, 0.0, 0.0, 1.0, 1.0,
   ]);
 
   const vao = gl.createVertexArray();
@@ -146,7 +150,10 @@
   gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
 
   gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 3*4, 0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 7*4, 0);
+
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 7*4, 3 * 4);
 
   gl.bindVertexArray(null);
 
