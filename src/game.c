@@ -21,11 +21,12 @@ struct Face
 typedef struct Obj_Model Obj_Model;
 struct Obj_Model
 {
-    Point3D *points;
+    Vec3 *points;
     int points_count;
     Face *faces;
     int faces_count;
     b32 is_valid;
+    b32 has_normals;
 };
 
 inline b32 is_digit(char c)
@@ -42,7 +43,7 @@ Obj_Model parse_obj(char *buf, size_t size)
     {
         return model;
     }
-    model.points = (Point3D*)malloc(sizeof(Point3D) * 9000);
+    model.points = (Vec3*)malloc(sizeof(Vec3) * 9000);
     model.faces = (Face*)malloc(sizeof(Face) * 9000);
     char* at = buf;
     while (*at == ' ' || *at == '\r' || *at == '\n')
@@ -67,7 +68,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                         {
                             at++;
                             char *start = at;
-#if 1
+#if 0
                             f32 a = 0;
                             b32 found = 0;
                             int past_point = 0;
@@ -166,7 +167,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                         }
                         at++;
                         model.points_count++;
-                        model.points[model.points_count] = (Point3D){coords[0], coords[1], coords[2]};
+                        model.points[model.points_count] = (Vec3){coords[0], coords[1], coords[2]};
                         //printf("v %.7f %.7f %.7f\n", coords[0], coords[1], coords[2]);
                         //printf("v %.7f %.7f %.7f\n", coords2[0], coords2[1], coords2[2]);
                     }break;
@@ -187,36 +188,61 @@ Obj_Model parse_obj(char *buf, size_t size)
 				while (j < 3)
 				{
                     int i = 0;
-					while (i < 3)
-					{
-						int index = 0;
-                        while (*at != ' ' && *at != '/' && *at != '\n')
-						{
-							if (is_digit(*at))
-							{
-								index *= 10;
-								index += (int)(*at - '0');
-							}
+                    int attrib_counter = 0;
+                    int index = 0;
+                    while (*at != '\0')
+                    {
+                        if(*at == ' ' || *at == '\n' || *at == '\r')
+                        {
+                            if (*at == '\r') at ++;
+                            if (attrib_counter == 0)
+                            {
+                                *v++ = index;
+                                index = 0;
+                            }
+                            else if (attrib_counter == 1)
+                            {
+                                *vt++ = index;
+                                index = 0;
+                            }
+                            else if (attrib_counter == 2)
+                            {
+                                *vn++ = index;
+                                index = 0;
+                            }
+                            attrib_counter++;
+                            break;
+                        }
+                        if(*at == '/' )
+                        {
+                            if (attrib_counter == 0)
+                            {
+                                *v++ = index;
+
+                                index = 0;
+
+                            }
+                            else if (attrib_counter == 1)
+                            {
+                                *vt++ = index;
+                                index = 0;
+                            }
+                            attrib_counter++;
                             at++;
-						}
-                        
-                        if (i == 0)
-                        {
-                            *v++ = index;
+                            continue;
                         }
-                        else if (i == 1)
+
+                        if (is_digit(*at))
                         {
-                            *vt++ = index;
+                            index *= 10;
+                            index += (int)(*at - '0');
                         }
-                        else if (i == 2)
-                        {
-                            *vn++ = index;
-                        }
-                        
-						face.packed_data[j * 3 + i] = index;
                         at++;
-						i++;
-					}
+                    }
+
+                    
+                    face.packed_data[j * 3 + i] = index;
+                    at++;
 					j++;
 				}
 				model.faces_count++;
@@ -227,10 +253,8 @@ Obj_Model parse_obj(char *buf, size_t size)
 			case '#':
 			{
                 char *start = at;
-                int size = 1;
                 while(*at != '\n' && *at != '\0')
                 {
-                    size++;
                     at++;
                 }
                 //printf("%.*s\n", size, start);
@@ -283,14 +307,17 @@ internal void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u32 color
 	u32 x_min = (u32)roundf(x);
 	u32 y_min = (u32)roundf(y);
 #else
+    // if i dont do this it overflows the integer when converting it back to u32
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
 	u32 x_min = x;
 	u32 y_min = y;
 #endif
 #if 1
-    if (x_min < 0) x_min = 0;
-    if (x_min > buffer->width - 1) x_min = buffer->width - 1;
-    if (y_min < 0) y_min = 0;
-    if (y_min > buffer->height - 1) y_min = buffer->height - 1;
+   // if (x_min < 0) x_min = 0;
+    if (x_min >= buffer->width - 1) x_min = buffer->width - 1;
+    //if (y_min < 0) y_min = 0;
+    if (y_min >= buffer->height - 1) y_min = buffer->height - 1;
 #else
     if (x_min < 0) return;
     if (x_min > buffer->width - 1) return;
@@ -316,6 +343,11 @@ struct Vec2F32
 inline f32 dot(Vec2F32 a, Vec2F32 b)
 {
     return a.x * b.x + a.y * b.y;
+}
+
+inline f32 dotvp(Vec3 a, Vec3 b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
 inline f32 len_sq(Vec2F32 a)
@@ -567,14 +599,14 @@ void draw_triangle__scanline(Software_Render_Buffer *buffer, Vec2F32 A, Vec2F32 
     //framebuffer->set(C.x, C.y, green);
 }
 
-//Point3D point_rotate_y(Point3D p, f32 angle)
-Point3D point_scalar(Point3D p, f32 s)
+//Vec3 point_rotate_y(Vec3 p, f32 angle)
+Vec3 point_scalar(Vec3 p, f32 s)
 {
-    return (Point3D) {p.x * s, p.y * s, p.z * s};
+    return (Vec3) {p.x * s, p.y * s, p.z * s};
 }
-Point3D point_rotate_y(Point3D p, f32 c, f32 s)
+Vec3 point_rotate_y(Vec3 p, f32 c, f32 s)
 {
-    Point3D result = {0};
+    Vec3 result = {0};
     
     //f32 c = cos(angle);
     //f32 s = sin(angle);
@@ -591,7 +623,48 @@ Point3D point_rotate_y(Point3D p, f32 c, f32 s)
     return result;
 }
 
-global Obj_Model model;
+Vec3 point_rotate_x(Vec3 p, f32 c, f32 s)
+{
+    Vec3 result = {0};
+    
+    //f32 c = cos(angle);
+    //f32 s = sin(angle);
+    
+    result.x = p.x;
+    result.z = p.z * c + p.x * s;
+    result.y = -p.z * s + p.y * c;
+    
+    //result.x = p.x;
+    //result.y = p.y * c - p.z * s;
+    //result.z = p.y * s + p.z * c;
+    
+    
+    return result;
+}
+
+Vec3 point_rotate_z(Vec3 p, f32 c, f32 s)
+{
+    Vec3 result = {0};
+    
+    //f32 c = cos(angle);
+    //f32 s = sin(angle);
+    
+    result.x = p.x * c + p.y * s;
+    result.y = -p.x * s + p.y * c;
+    result.z = p.z;
+    
+    //result.x = p.x;
+    //result.y = p.y * c - p.z * s;
+    //result.z = p.y * s + p.z * c;
+    
+    
+    return result;
+}
+
+global Obj_Model model_african_head;
+global Obj_Model model_teapot;
+global Obj_Model model_diablo;
+global Obj_Model model_f117;
 
 struct App_Memory
 {
@@ -604,36 +677,84 @@ struct App_Input
     f32 dt;
 };
 
-Point3D project_perspective_gl(Point3D p,
-                               f32 fov_y_rad,
-                               f32 aspect,
-                               f32 z_near,
-                               f32 z_far)
-{
-    f32 f = 1.0f / tanf(fov_y_rad * 0.5f);
-    
-    Point3D out;
-    
-    out.x = (p.x * f) / (aspect * -p.z);
-    out.y = (p.y * f) / (-p.z);
-    
-    // OpenGL depth mapping to [-1,1]
-    out.z = (z_far + z_near) / (z_near - z_far)
-        + (2.0f * z_far * z_near) / (z_near - z_far) / p.z;
-    
-    return out; // this is NDC
-}
 
 typedef struct Entity Entity;
 struct Entity
 {
     const char* name;
-    Obj_Model model;
-    Point3D position;
+    Obj_Model *model;
+    Vec3 position;
 };
 
 global Entity entities[100];
 global u32 entity_count;
+global u32 id;
+
+typedef struct AnchorData AnchorData;
+struct AnchorData
+{
+    LONGLONG result;
+    const char* name;
+    u32 count;
+};
+
+global AnchorData anchors[150];
+
+typedef struct TimeContext TimeContext;
+struct TimeContext
+{
+    TimeContext *next;
+    const char* name;
+    LONGLONG start;
+    u32 id;
+    b32 print;
+};
+
+#if 1
+global TimeContext *time_context;
+internal void BeginTime(const char *name, b32 print)
+{
+    TimeContext *node = (TimeContext*)malloc(sizeof(TimeContext));
+    node->next = time_context;
+    time_context = node;
+    node->print = print;
+    if(!print)
+        node->id = __COUNTER__;
+
+    node->name = name;
+    node->start = timer_get_os_time();
+}
+
+internal void EndTime()
+{
+    TimeContext *node = time_context;
+    time_context = node->next;
+
+    LONGLONG end = timer_get_os_time();
+    LONGLONG result = end - node->start;
+    if(node->print)
+    {
+      printf("[%s] %.2fms\n", node->name, timer_os_time_to_ms(result));
+    }
+    else
+    {
+        anchors[node->id].name = node->name;
+        anchors[node->id].result += result;
+        anchors[node->id].count += 1;
+
+    }
+    free(node);
+}
+#else
+global TimeContext *time_context;
+internal void BeginTime(const char *name, b32 print)
+{
+}
+
+internal void EndTime()
+{
+}
+#endif
 
 UPDATE_AND_RENDER(update_and_render)
 {
@@ -643,17 +764,35 @@ UPDATE_AND_RENDER(update_and_render)
     {
         timer_init();
         const char *filename = ".\\obj\\african_head\\african_head.obj";
-        //filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
-        //filename = ".\\obj\\f117.obj";
         OS_FileReadResult obj = os_file_read(filename);
-        model = parse_obj(obj.data, obj.size);
+        model_african_head = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.faces_count / 3);
+
+        filename = ".\\obj\\teapot.obj";
+        obj = os_file_read(filename);
+        model_teapot = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.faces_count / 3);
+
+        filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
+        obj = os_file_read(filename);
+        model_diablo = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.faces_count / 3);
+
+        filename = ".\\obj\\f117.obj";
+        obj = os_file_read(filename);
+        model_f117 = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.faces_count / 3);
         
         {
-            entities[entity_count++] = (Entity) { .name = "enemy_1", .model = model, .position = (Point3D) {0.0, 0.3, 5} };
-            entities[entity_count++] = (Entity) { .name = "enemy_2", .model = model, .position = (Point3D) {-0.8, 0.3, 2} };
-            entities[entity_count++] = (Entity) { .name = "enemy_3", .model = model, .position = (Point3D) {0.5, 0, 1} };
-            entities[entity_count++] = (Entity) { .name = "enemy_4", .model = model, .position = (Point3D) {-0.5, 0.5, 3} };
+            entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.1, 3} };
+            entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
+            entities[entity_count++] = (Entity) { .name = "enemy_3", .model = &model_diablo, .position = (Vec3) {0.5, 0, 1} };
+            entities[entity_count++] = (Entity) { .name = "enemy_4", .model = &model_african_head, .position = (Vec3) {-0.5, -0.2, 1} };
+            // should in theory??? be contained between +- 2.303627
         }
+        printf("Entity count: %d\n", entity_count);
+
+        time_context = (TimeContext*)malloc(sizeof(TimeContext));
         init = 1;
     }
     u32 black = 0xff000000;
@@ -668,13 +807,13 @@ UPDATE_AND_RENDER(update_and_render)
     local_persist f32 accum_dt = 0;
     local_persist f32 angle = 0;
     accum_dt += dt;
-    local_persist int k = 1;
+    local_persist int ks = 1;
     if(accum_dt > 5.0f)
     {
-        k = -1 * k;
+        ks = -1 * ks;
         accum_dt = 0;
     }
-    angle += k * dt;
+    angle += ks * dt;
     // questions:
     // what stage does the mapping from ndc to screen cordinates aka pixel buffer
     //  probably after perspective divide, altough i should really really really watch the pikuma course first because im skipping too many fundamentals sadly!
@@ -684,141 +823,260 @@ UPDATE_AND_RENDER(update_and_render)
     Vec3 camera_target = (Vec3) {0, 0, 1};
     camera_target = vec3_sub(camera_target, camera_eye);
     f32 fov = 3.141592 / 3.0; // 60 deg
-    f32 aspect = (f32)buffer->height / (f32)buffer->width;
+    //f32 aspect_ori = (f32)buffer->height / (f32)buffer->width;
+    f32 aspect = (f32)buffer->width / (f32)buffer->height;
     f32 znear = 1.0f;
     f32 zfar = 50.0f;
+    f32 k = zfar / (zfar - znear);
     Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+
+    // rolled perspective
+    f32 g = 1.0f / tan(fov * 0.5f);
+    f32 g_over_aspect = g / aspect;
+    // rolled perspective
+
     Mat4 view = mat4_look_at(camera_eye, camera_target, (Vec3) {0, 1, 0});
+    view = mat4_identity();
     
     LONGLONG model_now = timer_get_os_time();
 	f32 c = cos(angle);
 	f32 s = sin(angle);
-	for (u32 entity = 0; entity < entity_count; entity++)
-	{
-        Entity* e = entities + entity;
-		if(model.is_valid)
-		{
-			for(int face_index = 1; face_index <= model.faces_count; face_index++)
-			{
-				// TODO at face_index 375 minx ends up being -1004 which i guess thats why
-				// i see a wrong obj
-				Face face = model.faces[face_index];
-				Point3D v0 = model.points[face.v[0]];
-				Point3D v1 = model.points[face.v[1]];
-				Point3D v2 = model.points[face.v[2]];
-                
-				v0 = point_rotate_y(v0, c, s);
-				v1 = point_rotate_y(v1, c, s);
-				v2 = point_rotate_y(v2, c, s);
-                
-                v0 = point_scalar(v0, 0.2f);
-                v1 = point_scalar(v1, 0.2f);
-                v2 = point_scalar(v2, 0.2f);
-                
-                v0.x += e->position.x;
-                v0.y += e->position.y;
-                v0.z += e->position.z;
-                
-                v1.x += e->position.x;
-                v1.y += e->position.y;
-                v1.z += e->position.z;
-                
-                v2.x += e->position.x;
-                v2.y += e->position.y;
-                v2.z += e->position.z;
-                
-                Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
-                Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
-                Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
-                
-                transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
-                transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
-                transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
-                if(transformed_v0.w != 0)
+	f32 c_90 = cos(3.14 / 2.0f);
+	f32 s_90 = sin(3.14 / 2.0f);
+    {
+        BeginTime("rendering models", 1);
+        for (u32 entity = 0; entity < entity_count; entity++)
+        //for (u32 entity = 0; entity < 1; entity++)
+        {
+            Entity* e = entities + entity;
+            Obj_Model *model = e->model;
+            if(model->is_valid)
+            {
+                for(int face_index = 1; face_index <= model->faces_count; face_index++)
                 {
-                    transformed_v0.x /= transformed_v0.w;
-                    transformed_v0.y /= transformed_v0.w;
-                    transformed_v0.z /= transformed_v0.w;
+                    u32 color = green;
+                    Face face = model->faces[face_index];
+                    Vec3 v0 = model->points[face.v[0]];
+                    Vec3 v1 = model->points[face.v[1]];
+                    Vec3 v2 = model->points[face.v[2]];
+
+                    if (model->has_normals)
+                    {
+						Vec3 n0 = model->points[face.vn[0]];
+						Vec3 n1 = model->points[face.vn[1]];
+						Vec3 n2 = model->points[face.vn[2]];
+                    }
+
+
+                    if(model == &model_f117)
+                    {
+
+                        v0 = point_rotate_z(v0, c_90, s_90);
+                        v1 = point_rotate_z(v1, c_90, s_90);
+                        v2 = point_rotate_z(v2, c_90, s_90);
+
+                        v0 = point_rotate_y(v0, c, s);
+                        v1 = point_rotate_y(v1, c, s);
+                        v2 = point_rotate_y(v2, c, s);
+
+
+
+                    }
+                    else
+                    {
+						v0 = point_rotate_y(v0, c, s);
+						v1 = point_rotate_y(v1, c, s);
+						v2 = point_rotate_y(v2, c, s);
+                    }
+                    
+                    // World space
+                    v0 = point_scalar(v0, 0.2f);
+                    v1 = point_scalar(v1, 0.2f);
+                    v2 = point_scalar(v2, 0.2f);
+                    
+                    v0.x += e->position.x;
+                    v0.y += e->position.y;
+                    v0.z += e->position.z;
+                    
+                    v1.x += e->position.x;
+                    v1.y += e->position.y;
+                    v1.z += e->position.z;
+                    
+                    v2.x += e->position.x;
+                    v2.y += e->position.y;
+                    v2.z += e->position.z;
+
+
+                    #if 0
+                    {
+                        Vec3 N = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
+                        Vec3 V = vec3_sub(camera_eye, v0);
+                        f32 dot_result = vec3_dot(N, V);
+                        // clip everything that has a normal pointing in the opposite direction to vertex to camera
+                        if(dot_result <= 0)
+                        {
+                            continue;
+                        }
+                    }
+                    #endif
+
+                    
+                    // view space
+                    Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+                    Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+                    Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+                    Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+                    Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+                    Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+                    Vec3 N = vec3_cross(vec3_sub(transformed_v1_v3, transformed_v0_v3), vec3_sub(transformed_v2_v3, transformed_v0_v3));
+                    //if(N.z >= 0 ) continue;
+                    if(N.z >= 0 )
+                    {
+                        // cull
+                        color = blue;
+                        continue;
+                    }
+                    else
+                    {
+                        color = green;
+                    }
+
+
+
+                    // why is this not working?
+                    if(transformed_v0.z <= znear)
+                    {
+                        //continue;
+                    }
+                    if(transformed_v1.z <= znear)
+                    {
+                        //continue;
+                    }
+                    if(transformed_v2.z <= znear)
+                    {
+                        //continue;
+                    }
+                    
+                    #if 1
+                    {
+                        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+                        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+                        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+                        //BeginTime("transformation", 0);
+                        if(transformed_v0.w != 0)
+                        {
+                            transformed_v0.x /= transformed_v0.w;
+                            transformed_v0.y /= transformed_v0.w;
+                            transformed_v0.z /= transformed_v0.w;
+                        }
+                        
+                        if(transformed_v1.w != 0)
+                        {
+                            transformed_v1.x /= transformed_v1.w;
+                            transformed_v1.y /= transformed_v1.w;
+                            transformed_v1.z /= transformed_v1.w;
+                        }
+                        
+                        if(transformed_v2.w != 0)
+                        {
+                            transformed_v2.x /= transformed_v2.w;
+                            transformed_v2.y /= transformed_v2.w;
+                            transformed_v2.z /= transformed_v2.w;
+                        }
+                    }
+                    #else
+                    f32 w_v0 = transformed_v0.z;
+                    f32 w_v1 = transformed_v1.z;
+                    f32 w_v2 = transformed_v2.z;
+
+                    // g_over_aspect is used because g is the focal length, which is where
+                    // the projection plane is: z = g
+                    // and because the idea is to get this coordinates into the view volume
+                    // it must go from [-aspect, aspect] to [-1, 1]
+                    // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
+                    // i divide it by aspect. So resulting form is: g_over_aspect * x
+                    transformed_v0.x = g_over_aspect * transformed_v0.x;
+                    transformed_v0.y = g * transformed_v0.y;
+                    transformed_v0.z = -znear * k * transformed_v0.z;
+
+                    transformed_v1.x = g_over_aspect * transformed_v1.x;
+                    transformed_v1.y = g * transformed_v1.y;
+                    transformed_v1.z = -znear * k * transformed_v1.z;
+
+                    transformed_v2.x = g_over_aspect * transformed_v2.x;
+                    transformed_v2.y = g * transformed_v2.y;
+                    transformed_v2.z = -znear * k * transformed_v2.z;
+
+
+                    transformed_v0.x /= w_v0;
+                    transformed_v0.y /= w_v0;
+
+                    transformed_v1.x /= w_v1;
+                    transformed_v1.y /= w_v1;
+
+                    transformed_v2.x /= w_v2;
+                    transformed_v2.y /= w_v2;
+                    #endif
+                    //EndTime();
+                    
+                    f32 mapped_v0_x;
+                    f32 mapped_v0_y;
+                    f32 mapped_v1_x;
+                    f32 mapped_v1_y;
+                    f32 mapped_v2_x;
+                    f32 mapped_v2_y;
+                    
+                    //BeginTime("hello", 0);
+                    {
+
+                        #if 1
+                        mapped_v0_x = (transformed_v0.x * 0.5f + 0.5f) * buffer->width;
+                        mapped_v0_y = (1.0f - (transformed_v0.y * 0.5f + 0.5f)) * buffer->height;
+                        mapped_v1_x = (transformed_v1.x * 0.5f + 0.5f) * buffer->width;
+                        mapped_v1_y = (1.0f - (transformed_v1.y * 0.5f + 0.5f)) * buffer->height;
+                        mapped_v2_x = (transformed_v2.x * 0.5f + 0.5f) * buffer->width;
+                        mapped_v2_y = (1.0f - (transformed_v2.y * 0.5f + 0.5f)) * buffer->height;
+
+
+
+                        #else
+						mapped_v0_x = map_range(transformed_v0.x, -1.0f, 1.0f, 0.0f, buffer->width);
+						mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, buffer->height, 0.0f);
+						mapped_v1_x = map_range(transformed_v1.x, -1.0f, 1.0f, 0.0f, buffer->width);
+						mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, buffer->height, 0.0f);
+						mapped_v2_x = map_range(transformed_v2.x, -1.0f, 1.0f, 0.0f, buffer->width);
+						mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, buffer->height, 0.0f);
+                        #endif
+                    }
+                    //EndTime();
+                    //printf("First coord mapped %.4f -> %.4f\n", v0.x, mapped_v0_x);
+                    //BeginTime("dsa", 0);
+                    {
+                        Vec2F32 v0 = {mapped_v0_x, mapped_v0_y};
+                        Vec2F32 v1 = {mapped_v1_x, mapped_v1_y};
+                        Vec2F32 v2 = {mapped_v2_x, mapped_v2_y};
+                        
+                        draw_triangle__scanline(buffer, v0, v1, v2, color);
+                        //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
+                        
+                        //Triangle_Mesh triangle = {v0, v1, v2, blue};
+                        //prepare_scene_for_this_frame(&triangle, width, height);
+                    }
+                    //EndTime();
                 }
-                
-                if(transformed_v1.w != 0)
-                {
-                    transformed_v1.x /= transformed_v1.w;
-                    transformed_v1.y /= transformed_v1.w;
-                    transformed_v1.z /= transformed_v1.w;
-                }
-                
-                if(transformed_v2.w != 0)
-                {
-                    transformed_v2.x /= transformed_v2.w;
-                    transformed_v2.y /= transformed_v2.w;
-                    transformed_v2.z /= transformed_v2.w;
-                }
-                
-                //assert(transformed_v0.x >= -1.0f && transformed_v0.x <= 1);
-                //assert(transformed_v1.x >= -1.0f && transformed_v1.x <= 1);
-                //assert(transformed_v2.x >= -1.0f && transformed_v2.x <= 1);
-                
-                
-                //f32 z = 5;
-				//v0.z -= z;
-				//v1.z -= z;
-				//v2.z -= z;
-				//v0 = project_perspective_gl(v0, 0.78, 4.0 / 3.0, 0.001f, 100);
-				//v1 = project_perspective_gl(v1, 0.78, 4.0 / 3.0, 0.001f, 100);
-				//v2 = project_perspective_gl(v2, 0.78, 4.0 / 3.0, 0.001f, 100);
-                
-				f32 mapped_v0_x;
-				f32 mapped_v0_y;
-				f32 mapped_v1_x;
-				f32 mapped_v1_y;
-				f32 mapped_v2_x;
-				f32 mapped_v2_y;
-                
-				{
-					mapped_v0_x = map_range(transformed_v0.x, -1.0f, 1.0f, 0.0f, buffer->width);
-					//mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, 0.0f, buffer->height);
-					mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, buffer->height, 0.0f);
-					mapped_v1_x = map_range(transformed_v1.x, -1.0f, 1.0f, 0.0f, buffer->width);
-					//mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, 0.0f, buffer->height);
-					mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, buffer->height, 0.0f);
-					mapped_v2_x = map_range(transformed_v2.x, -1.0f, 1.0f, 0.0f, buffer->width);
-					//mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, 0.0f, buffer->height);
-					mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, buffer->height, 0.0f);
-                    
-					//mapped_v0_x = transformed_v0.x * (f32)buffer->width / 2.0f;
-					//mapped_v0_y = transformed_v0.y * (f32)buffer->height / 2.0f;
-					//mapped_v1_x = transformed_v1.x * (f32)buffer->width / 2.0f;
-					//mapped_v1_y = transformed_v1.y * (f32)buffer->height / 2.0f;
-					//mapped_v2_x = transformed_v2.x * (f32)buffer->width / 2.0f;
-					//mapped_v2_y = transformed_v2.y * (f32)buffer->height / 2.0f;
-                    
-					//mapped_v0_x += (f32)buffer->width / 2.0f;
-					//mapped_v0_y += (f32)buffer->height / 2.0f;
-					//mapped_v1_x += (f32)buffer->width / 2.0f;
-					//mapped_v1_y += (f32)buffer->height / 2.0f;
-					//mapped_v2_x += (f32)buffer->width / 2.0f;
-					//mapped_v2_y += (f32)buffer->height / 2.0f;
-                    
-                    
-				}
-				//printf("First coord mapped %.4f -> %.4f\n", v0.x, mapped_v0_x);
-				{
-					Vec2F32 v0 = {mapped_v0_x, mapped_v0_y};
-					Vec2F32 v1 = {mapped_v1_x, mapped_v1_y};
-					Vec2F32 v2 = {mapped_v2_x, mapped_v2_y};
-                    
-					draw_triangle__scanline(buffer, v0, v1, v2, red);
-					//draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
-                    
-					//Triangle_Mesh triangle = {v0, v1, v2, blue};
-					//prepare_scene_for_this_frame(&triangle, width, height);
-				}
-			}
+            }
         }
+        EndTime();
     }
-    LONGLONG model_end = timer_get_os_time();
-    LONGLONG result = model_end - model_now;
+    for (u32 i = 0; i < 20; i++)
+    {
+        if (anchors[i].result == 0) continue;
+        printf("[%s] hit per frame: %d, time_total: %.5fms  time_average: %.5fms\n", anchors[i].name, anchors[i].count, timer_os_time_to_ms(anchors[i].result), timer_os_time_to_ms(anchors[i].result) / anchors[i].count);
+        anchors[i].result = 0;
+        anchors[i].count = 0;
+    }
+    //LONGLONG model_end = timer_get_os_time();
+    //LONGLONG result = model_end - model_now;
     
-    //printf("rendering took: %.2fms\n", timer_os_time_to_ms(result));
+    //printf("per frame time: %.2fms\n", timer_os_time_to_ms(result));
 }

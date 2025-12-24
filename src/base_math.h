@@ -26,9 +26,15 @@ inline Vec3 vec3_add(Vec3 a, Vec3 b)
     return (Vec3) {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
+inline Vec3 vec3_scalar(Vec3 a, f32 s)
+{
+    return (Vec3) {a.x * s, a.y * s, a.z * s};
+}
+
 inline f32 vec3_dot(Vec3 a, Vec3 b)
 {
-    return (f32) {a.x * b.x + a.y * b.y + a.z * b.z};
+    f32 result = (f32){ a.x * b.x + a.y * b.y + a.z * b.z };
+    return result;
 }
 
 inline Vec3 vec3_cross(Vec3 a, Vec3 b)
@@ -57,9 +63,9 @@ inline Vec3 vec3_normalize(Vec3 a)
 {
     Vec3 result = { 0};
     f32 magnitude = vec3_magnitude_squared(a);
-    if(magnitude > 0.00001)
+    if(magnitude > 1e-12f)
     {
-        f32 denominator = (1.0f / magnitude);
+        f32 denominator = (1.0f / sqrtf(magnitude));
         result.x = a.x * denominator;
         result.y = a.y * denominator;
         result.z = a.z * denominator;
@@ -104,7 +110,7 @@ Mat4 mat4_rotation_y(f32 angle)
     return result;
 }
 
-Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
+Mat4 mat4_make_perspective_ori(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     // | (h/w)*1/tan(fov/2)             0              0                 0 |
     // |                  0  1/tan(fov/2)              0                 0 |
     // |                  0             0     zf/(zf-zn)  (-zf*zn)/(zf-zn) |
@@ -114,6 +120,18 @@ Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     m.m[1][1] = 1 / tan(fov / 2);
     m.m[2][2] = zfar / (zfar - znear);
     m.m[2][3] = (-zfar * znear) / (zfar - znear);
+    m.m[3][2] = 1.0;
+    return m;
+}
+
+Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
+    f32 g = 1.0f / tan(fov * 0.5);
+    f32 k = zfar / (zfar - znear);
+    Mat4 m = {{{ 0 }}};
+    m.m[0][0] = g / aspect;
+    m.m[1][1] = g;
+    m.m[2][2] = k;
+    m.m[2][3] = -znear * k;
     m.m[3][2] = 1.0;
     return m;
 }
