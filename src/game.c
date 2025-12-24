@@ -9,6 +9,7 @@
 
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 1
+#define EDGE_FUNCTIONS 0
 
 typedef struct Face Face;
 struct Face
@@ -757,6 +758,12 @@ internal void EndTime()
 {
 }
 #endif
+static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
+{
+    return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
+}
+
+
 
 UPDATE_AND_RENDER(update_and_render)
 {
@@ -817,6 +824,7 @@ UPDATE_AND_RENDER(update_and_render)
     u32 red = 0xffff0000;
     u32 green = 0xff00ff00;
     u32 blue = 0xff0000ff;
+    u32 yellow = green | red;
     u32 steam_chat_background_color = 0xff1e2025;
     //draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff111f0f);
     draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, steam_chat_background_color);
@@ -862,231 +870,416 @@ UPDATE_AND_RENDER(update_and_render)
 	f32 s_90 = sin(3.14 / 2.0f);
     {
         BeginTime("rendering models", 1);
-        for (u32 entity = 0; entity < entity_count; entity++)
-        //for (u32 entity = 0; entity < 1; entity++)
+        #if 0
         {
-            Entity* e = entities + entity;
-            Obj_Model *model = e->model;
-            if(model->is_valid)
+            for (u32 entity = 0; entity < entity_count; entity++)
+            //for (u32 entity = 0; entity < 1; entity++)
             {
-                for(int face_index = 1; face_index <= model->faces_count; face_index++)
+                Entity* e = entities + entity;
+                Obj_Model *model = e->model;
+                if(model->is_valid)
                 {
-                    u32 color = blue;
-                    Face face = model->faces[face_index];
-                    Vec3 v0 = model->points[face.v[0]];
-                    Vec3 v1 = model->points[face.v[1]];
-                    Vec3 v2 = model->points[face.v[2]];
-
-                    if (model->has_normals)
+                    for(int face_index = 1; face_index <= model->faces_count; face_index++)
                     {
-						Vec3 n0 = model->points[face.vn[0]];
-						Vec3 n1 = model->points[face.vn[1]];
-						Vec3 n2 = model->points[face.vn[2]];
-                    }
+                        u32 color = blue;
+                        Face face = model->faces[face_index];
+                        Vec3 v0 = model->points[face.v[0]];
+                        Vec3 v1 = model->points[face.v[1]];
+                        Vec3 v2 = model->points[face.v[2]];
 
-
-                    #if ROTATION
-                    if(model == &model_f117)
-                    {
-
-                        v0 = point_rotate_z(v0, c_90, s_90);
-                        v1 = point_rotate_z(v1, c_90, s_90);
-                        v2 = point_rotate_z(v2, c_90, s_90);
-
-                        v0 = point_rotate_y(v0, c, s);
-                        v1 = point_rotate_y(v1, c, s);
-                        v2 = point_rotate_y(v2, c, s);
-                    }
-                    else
-                    {
-						v0 = point_rotate_y(v0, c, s);
-						v1 = point_rotate_y(v1, c, s);
-						v2 = point_rotate_y(v2, c, s);
-                    }
-                    #endif
-                    
-                    // World space
-                    v0 = point_scalar(v0, 0.2f);
-                    v1 = point_scalar(v1, 0.2f);
-                    v2 = point_scalar(v2, 0.2f);
-                    
-                    v0.x += e->position.x;
-                    v0.y += e->position.y;
-                    v0.z += e->position.z;
-                    
-                    v1.x += e->position.x;
-                    v1.y += e->position.y;
-                    v1.z += e->position.z;
-                    
-                    v2.x += e->position.x;
-                    v2.y += e->position.y;
-                    v2.z += e->position.z;
-
-
-                    #if 0
-                    {
-                        Vec3 N = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
-                        Vec3 V = vec3_sub(camera_eye, v0);
-                        f32 dot_result = vec3_dot(N, V);
-                        // clip everything that has a normal pointing in the opposite direction to vertex to camera
-                        if(dot_result <= 0)
+                        if (model->has_normals)
                         {
+                            Vec3 n0 = model->points[face.vn[0]];
+                            Vec3 n1 = model->points[face.vn[1]];
+                            Vec3 n2 = model->points[face.vn[2]];
+                        }
+
+
+                        #if ROTATION
+                        if(model == &model_f117)
+                        {
+
+                            v0 = point_rotate_z(v0, c_90, s_90);
+                            v1 = point_rotate_z(v1, c_90, s_90);
+                            v2 = point_rotate_z(v2, c_90, s_90);
+
+                            v0 = point_rotate_y(v0, c, s);
+                            v1 = point_rotate_y(v1, c, s);
+                            v2 = point_rotate_y(v2, c, s);
+                        }
+                        else
+                        {
+                            v0 = point_rotate_y(v0, c, s);
+                            v1 = point_rotate_y(v1, c, s);
+                            v2 = point_rotate_y(v2, c, s);
+                        }
+                        #endif
+                        
+                        // World space
+                        v0 = point_scalar(v0, 0.2f);
+                        v1 = point_scalar(v1, 0.2f);
+                        v2 = point_scalar(v2, 0.2f);
+                        
+                        v0.x += e->position.x;
+                        v0.y += e->position.y;
+                        v0.z += e->position.z;
+                        
+                        v1.x += e->position.x;
+                        v1.y += e->position.y;
+                        v1.z += e->position.z;
+                        
+                        v2.x += e->position.x;
+                        v2.y += e->position.y;
+                        v2.z += e->position.z;
+
+
+                        #if 0
+                        {
+                            Vec3 N = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
+                            Vec3 V = vec3_sub(camera_eye, v0);
+                            f32 dot_result = vec3_dot(N, V);
+                            // clip everything that has a normal pointing in the opposite direction to vertex to camera
+                            if(dot_result <= 0)
+                            {
+                                continue;
+                            }
+                        }
+                        #endif
+
+                        
+                        // view space
+                        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+                        Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+                        Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+                        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+                        Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+                        Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+                        Vec3 N = vec3_cross(vec3_sub(transformed_v1_v3, transformed_v0_v3), vec3_sub(transformed_v2_v3, transformed_v0_v3));
+                        //if(N.z >= 0 ) continue;
+                        if(N.z >= 0 )
+                        {
+                            // cull
+                            //color = blue;
                             continue;
                         }
-                    }
-                    #endif
-
-                    
-                    // view space
-                    Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
-                    Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
-                    Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
-                    Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
-                    Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
-                    Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
-                    Vec3 N = vec3_cross(vec3_sub(transformed_v1_v3, transformed_v0_v3), vec3_sub(transformed_v2_v3, transformed_v0_v3));
-                    //if(N.z >= 0 ) continue;
-                    if(N.z >= 0 )
-                    {
-                        // cull
-                        //color = blue;
-                        continue;
-                    }
-                    else
-                    {
-                        //color = green;
-                    }
-
-
-
-                    // why is this not working?
-                    if(transformed_v0.z <= znear)
-                    {
-                        //continue;
-                    }
-                    if(transformed_v1.z <= znear)
-                    {
-                        //continue;
-                    }
-                    if(transformed_v2.z <= znear)
-                    {
-                        //continue;
-                    }
-                    
-                    #if 1
-                    {
-                        // remember that the projection matrix stores de viewspace z value in its w
-                        // but the result vector is in clip space so z is in clip space, not in 
-                        // viewspace, they are not the same zz
-                        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
-                        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
-                        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
-                        //BeginTime("transformation", 0);
-                        if(transformed_v0.w != 0)
+                        else
                         {
-                            transformed_v0.x /= transformed_v0.w;
-                            transformed_v0.y /= transformed_v0.w;
-                            transformed_v0.z /= transformed_v0.w;
+                            //color = green;
+                        }
+
+
+
+                        // why is this not working?
+                        if(transformed_v0.z <= znear)
+                        {
+                            //continue;
+                        }
+                        if(transformed_v1.z <= znear)
+                        {
+                            //continue;
+                        }
+                        if(transformed_v2.z <= znear)
+                        {
+                            //continue;
                         }
                         
-                        if(transformed_v1.w != 0)
-                        {
-                            transformed_v1.x /= transformed_v1.w;
-                            transformed_v1.y /= transformed_v1.w;
-                            transformed_v1.z /= transformed_v1.w;
-                        }
-                        
-                        if(transformed_v2.w != 0)
-                        {
-                            transformed_v2.x /= transformed_v2.w;
-                            transformed_v2.y /= transformed_v2.w;
-                            transformed_v2.z /= transformed_v2.w;
-                        }
-
-
-                    }
-                    #else
-                    f32 w_v0 = transformed_v0.z;
-                    f32 w_v1 = transformed_v1.z;
-                    f32 w_v2 = transformed_v2.z;
-
-                    // g_over_aspect is used because g is the focal length, which is where
-                    // the projection plane is: z = g
-                    // and because the idea is to get this coordinates into the view volume
-                    // it must go from [-aspect, aspect] to [-1, 1]
-                    // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
-                    // i divide it by aspect. So resulting form is: g_over_aspect * x
-                    transformed_v0.x = g_over_aspect * transformed_v0.x;
-                    transformed_v0.y = g * transformed_v0.y;
-                    transformed_v0.z = -znear * k * transformed_v0.z;
-
-                    transformed_v1.x = g_over_aspect * transformed_v1.x;
-                    transformed_v1.y = g * transformed_v1.y;
-                    transformed_v1.z = -znear * k * transformed_v1.z;
-
-                    transformed_v2.x = g_over_aspect * transformed_v2.x;
-                    transformed_v2.y = g * transformed_v2.y;
-                    transformed_v2.z = -znear * k * transformed_v2.z;
-
-
-                    transformed_v0.x /= w_v0;
-                    transformed_v0.y /= w_v0;
-
-                    transformed_v1.x /= w_v1;
-                    transformed_v1.y /= w_v1;
-
-                    transformed_v2.x /= w_v2;
-                    transformed_v2.y /= w_v2;
-                    #endif
-                    //EndTime();
-                    
-                    f32 mapped_v0_x;
-                    f32 mapped_v0_y;
-                    f32 mapped_v1_x;
-                    f32 mapped_v1_y;
-                    f32 mapped_v2_x;
-                    f32 mapped_v2_y;
-                    
-                    //BeginTime("hello", 0);
-                    {
-
                         #if 1
-                        mapped_v0_x = (transformed_v0.x * 0.5f + 0.5f) * buffer->width;
-                        mapped_v0_y = (1.0f - (transformed_v0.y * 0.5f + 0.5f)) * buffer->height;
-                        mapped_v1_x = (transformed_v1.x * 0.5f + 0.5f) * buffer->width;
-                        mapped_v1_y = (1.0f - (transformed_v1.y * 0.5f + 0.5f)) * buffer->height;
-                        mapped_v2_x = (transformed_v2.x * 0.5f + 0.5f) * buffer->width;
-                        mapped_v2_y = (1.0f - (transformed_v2.y * 0.5f + 0.5f)) * buffer->height;
+                        {
+                            // remember that the projection matrix stores de viewspace z value in its w
+                            // but the result vector is in clip space so z is in clip space, not in 
+                            // viewspace, they are not the same zz
+                            transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+                            transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+                            transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+                            //BeginTime("transformation", 0);
+                            if(transformed_v0.w != 0)
+                            {
+                                transformed_v0.x /= transformed_v0.w;
+                                transformed_v0.y /= transformed_v0.w;
+                                transformed_v0.z /= transformed_v0.w;
+                            }
+                            
+                            if(transformed_v1.w != 0)
+                            {
+                                transformed_v1.x /= transformed_v1.w;
+                                transformed_v1.y /= transformed_v1.w;
+                                transformed_v1.z /= transformed_v1.w;
+                            }
+                            
+                            if(transformed_v2.w != 0)
+                            {
+                                transformed_v2.x /= transformed_v2.w;
+                                transformed_v2.y /= transformed_v2.w;
+                                transformed_v2.z /= transformed_v2.w;
+                            }
 
 
-
+                        }
                         #else
-						mapped_v0_x = map_range(transformed_v0.x, -1.0f, 1.0f, 0.0f, buffer->width);
-						mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, buffer->height, 0.0f);
-						mapped_v1_x = map_range(transformed_v1.x, -1.0f, 1.0f, 0.0f, buffer->width);
-						mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, buffer->height, 0.0f);
-						mapped_v2_x = map_range(transformed_v2.x, -1.0f, 1.0f, 0.0f, buffer->width);
-						mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, buffer->height, 0.0f);
+                        f32 w_v0 = transformed_v0.z;
+                        f32 w_v1 = transformed_v1.z;
+                        f32 w_v2 = transformed_v2.z;
+
+                        // g_over_aspect is used because g is the focal length, which is where
+                        // the projection plane is: z = g
+                        // and because the idea is to get this coordinates into the view volume
+                        // it must go from [-aspect, aspect] to [-1, 1]
+                        // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
+                        // i divide it by aspect. So resulting form is: g_over_aspect * x
+                        transformed_v0.x = g_over_aspect * transformed_v0.x;
+                        transformed_v0.y = g * transformed_v0.y;
+                        transformed_v0.z = -znear * k * transformed_v0.z;
+
+                        transformed_v1.x = g_over_aspect * transformed_v1.x;
+                        transformed_v1.y = g * transformed_v1.y;
+                        transformed_v1.z = -znear * k * transformed_v1.z;
+
+                        transformed_v2.x = g_over_aspect * transformed_v2.x;
+                        transformed_v2.y = g * transformed_v2.y;
+                        transformed_v2.z = -znear * k * transformed_v2.z;
+
+
+                        transformed_v0.x /= w_v0;
+                        transformed_v0.y /= w_v0;
+
+                        transformed_v1.x /= w_v1;
+                        transformed_v1.y /= w_v1;
+
+                        transformed_v2.x /= w_v2;
+                        transformed_v2.y /= w_v2;
                         #endif
-                    }
-                    //EndTime();
-                    //printf("First coord mapped %.4f -> %.4f\n", v0.x, mapped_v0_x);
-                    //BeginTime("dsa", 0);
-                    {
-                        Vec2F32 v0 = {mapped_v0_x, mapped_v0_y};
-                        Vec2F32 v1 = {mapped_v1_x, mapped_v1_y};
-                        Vec2F32 v2 = {mapped_v2_x, mapped_v2_y};
+                        //EndTime();
                         
-                        draw_triangle__scanline(buffer, v0, v1, v2, color);
-                        //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
+                        f32 mapped_v0_x;
+                        f32 mapped_v0_y;
+                        f32 mapped_v1_x;
+                        f32 mapped_v1_y;
+                        f32 mapped_v2_x;
+                        f32 mapped_v2_y;
                         
-                        //Triangle_Mesh triangle = {v0, v1, v2, blue};
-                        //prepare_scene_for_this_frame(&triangle, width, height);
+                        //BeginTime("hello", 0);
+                        {
+                            #if 1
+                            mapped_v0_x = (transformed_v0.x * 0.5f + 0.5f) * buffer->width;
+                            mapped_v0_y = (1.0f - (transformed_v0.y * 0.5f + 0.5f)) * buffer->height;
+                            mapped_v1_x = (transformed_v1.x * 0.5f + 0.5f) * buffer->width;
+                            mapped_v1_y = (1.0f - (transformed_v1.y * 0.5f + 0.5f)) * buffer->height;
+                            mapped_v2_x = (transformed_v2.x * 0.5f + 0.5f) * buffer->width;
+                            mapped_v2_y = (1.0f - (transformed_v2.y * 0.5f + 0.5f)) * buffer->height;
+
+
+
+                            #else
+                            mapped_v0_x = map_range(transformed_v0.x, -1.0f, 1.0f, 0.0f, buffer->width);
+                            mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, buffer->height, 0.0f);
+                            mapped_v1_x = map_range(transformed_v1.x, -1.0f, 1.0f, 0.0f, buffer->width);
+                            mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, buffer->height, 0.0f);
+                            mapped_v2_x = map_range(transformed_v2.x, -1.0f, 1.0f, 0.0f, buffer->width);
+                            mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, buffer->height, 0.0f);
+                            #endif
+                        }
+                        //EndTime();
+                        //printf("First coord mapped %.4f -> %.4f\n", v0.x, mapped_v0_x);
+                        //BeginTime("dsa", 0);
+                        {
+                            Vec2F32 v0 = {mapped_v0_x, mapped_v0_y};
+                            Vec2F32 v1 = {mapped_v1_x, mapped_v1_y};
+                            Vec2F32 v2 = {mapped_v2_x, mapped_v2_y};
+                            
+                            draw_triangle__scanline(buffer, v0, v1, v2, color);
+                            //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
+                            
+                            //Triangle_Mesh triangle = {v0, v1, v2, blue};
+                            //prepare_scene_for_this_frame(&triangle, width, height);
+                        }
+                        //EndTime();
                     }
-                    //EndTime();
                 }
             }
+
         }
+        #else
+
+
+            // CCW o CW it doesnt even matter!
+            Vec3 vv0_color = (Vec3) {255, 0, 0};
+            Vec3 vv1_color = (Vec3) {0, 255, 0};
+            Vec3 vv2_color = (Vec3) {0, 0, 255};
+
+            // skewed
+            //Vec4 v0_v4 = (Vec4) {-0.2, 0.2, 1.0, 1.0f};
+            //Vec4 v1_v4 = (Vec4) {-0.4, 0.5, 1.2, 1.0f};
+            //Vec4 v2_v4 = (Vec4) {-0.6, 0.2, 1.0, 1.0f};
+            //center at origin
+            Vec4 v0_v4 = (Vec4) {0.0,  0.6, 100.0, 1.0f};
+            Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 2.0, 1.0f};
+            Vec4 v2_v4 = (Vec4) {0.6, -0.4, 2.0, 1.0f};
+
+            v0_v4 = mat4_mul_vec4(view, v0_v4);
+            v1_v4 = mat4_mul_vec4(view, v1_v4);
+            v2_v4 = mat4_mul_vec4(view, v2_v4);
+
+            v0_v4 = mat4_mul_vec4(persp, v0_v4);
+            v1_v4 = mat4_mul_vec4(persp, v1_v4);
+            v2_v4 = mat4_mul_vec4(persp, v2_v4);
+
+            f32 inv_w0 = 1.0f / v0_v4.w;
+            f32 inv_w1 = 1.0f / v1_v4.w;
+            f32 inv_w2 = 1.0f / v2_v4.w;
+            if(v0_v4.w != 0)
+            {
+                v0_v4.x *= inv_w0;
+                v0_v4.y *= inv_w0;
+                v0_v4.z *= inv_w0;
+            }
+            
+            if(v1_v4.w != 0)
+            {
+                v1_v4.x *= inv_w1;
+                v1_v4.y *= inv_w1;
+                v1_v4.z *= inv_w1;
+            }
+            
+            if(v2_v4.w != 0)
+            {
+                v2_v4.x *= inv_w2;
+                v2_v4.y *= inv_w2;
+                v2_v4.z *= inv_w2;
+            }
+
+
+            // viewport mapping
+			v0_v4.x = (v0_v4.x * 0.5f + 0.5f) * buffer->width;
+			v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v1_v4.x = (v1_v4.x * 0.5f + 0.5f) * buffer->width;
+			v1_v4.y = (1.0f - (v1_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v2_v4.x = (v2_v4.x * 0.5f + 0.5f) * buffer->width;
+			v2_v4.y = (1.0f - (v2_v4.y * 0.5f + 0.5f)) * buffer->height;
+
+            Vec3 v0 = (Vec3) {v0_v4.x, v0_v4.y, v0_v4.z};
+            Vec3 v1 = (Vec3) {v1_v4.x, v1_v4.y, v1_v4.z};
+            Vec3 v2 = (Vec3) {v2_v4.x, v2_v4.y, v2_v4.z};
+            #if 0
+            {
+                Vec2F32 v0f = (Vec2F32) {v0_v4.x, v0_v4.y};
+                Vec2F32 v1f = (Vec2F32) {v1_v4.x, v1_v4.y};
+                Vec2F32 v2f = (Vec2F32) {v2_v4.x, v2_v4.y};
+
+                draw_triangle__scanline(buffer, v0f, v1f, v2f, red);
+            }
+
+            #else
+            f32 minx = Min(Min(v0.x, v1.x), v2.x);
+            f32 miny = Min(Min(v0.y, v1.y), v2.y);
+            f32 maxx = Max(Max(v0.x, v1.x), v2.x);
+            f32 maxy = Max(Max(v0.y, v1.y), v2.y);
+            //draw_pixel(buffer, minx, miny, white);
+            //draw_pixel(buffer, maxx, maxy, white);
+
+			vv0_color = vec3_scalar(vv0_color, inv_w0);
+			vv1_color = vec3_scalar(vv1_color, inv_w1);
+			vv2_color = vec3_scalar(vv2_color, inv_w2);
+
+            Vec3 plane_normal_of_triangle = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
+            f32 area_of_parallelogram = vec3_magnitude(plane_normal_of_triangle);
+            f32 area_of_triangle = area_of_parallelogram / 2.0f;
+
+            #if EDGE_FUNCTIONS
+            Vec2F32 s0 = { v0_v4.x, v0_v4.y };
+            Vec2F32 s1 = { v1_v4.x, v1_v4.y };
+            Vec2F32 s2 = { v2_v4.x, v2_v4.y };
+
+            float area = edge(s0, s1, s2);          // signed
+            if (area == 0) return;                 // degenerate
+            for (u32 x = minx; x <= maxx; x++)
+            {
+                for (u32 y = miny; y <= maxy; y++)
+                {
+                    Vec2F32 p_v2 = (Vec2F32) {x, y};
+                    float w0 = edge(s1, s2, p_v2);
+                    float w1 = edge(s2, s0, p_v2);
+                    float w2 = edge(s0, s1, p_v2);
+                    // same sign test (works for both windings)
+                    if ((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0))
+                        continue;
+                    float inv_area = 1.0f / area;
+                    float b0 = w0 * inv_area;
+                    float b1 = w1 * inv_area;
+                    float b2 = w2 * inv_area;
+
+                    Vec3 p = (Vec3) {x, y, 0};
+                    Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
+                    Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
+                    Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
+                    f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
+                    f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
+                    f32 w = 1.0f - u - v;
+                    if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
+                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
+                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
+                        {
+                           continue; 
+                        }
+                    
+
+                    //Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
+                    //f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
+                    //Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
+                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+
+                    u32 interpolated_color_to_u32 = 0;
+
+                    interpolated_color_to_u32 |= (0xFF << 24) |
+                        (((u32)final_color.x) & 0xFF) << 16 |
+                        (((u32)final_color.y) & 0xFF) << 8 |
+                        (((u32)final_color.z) & 0xFF) << 0;
+
+                    draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
+                }
+            }
+            #else
+
+            for (u32 x = minx; x <= maxx; x++)
+            {
+                for (u32 y = miny; y <= maxy; y++)
+                {
+                    Vec3 p = (Vec3) {x, y, 0};
+                    Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
+                    Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
+                    Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
+                    f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
+                    f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
+                    f32 w = 1.0f - u - v;
+                    if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
+                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
+                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
+                        {
+                           continue; 
+                        }
+                    
+
+                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
+                    f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
+                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                    u32 interpolated_color_to_u32 = 0;
+
+                    interpolated_color_to_u32 |= (0xFF << 24) |
+                        (((u32)final_color.x) & 0xFF) << 16 |
+                        (((u32)final_color.y) & 0xFF) << 8 |
+                        (((u32)final_color.z) & 0xFF) << 0;
+
+                    draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
+                }
+            }
+            #endif
+                #endif
+            
+        #endif
         EndTime();
     }
     for (u32 i = 0; i < 20; i++)
