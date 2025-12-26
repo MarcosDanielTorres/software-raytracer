@@ -9,7 +9,15 @@
 
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 1
-#define EDGE_FUNCTIONS 0
+
+#define EDGE_FUNCTIONS 1
+#define OLIVEC 0
+
+#define EDGE_STEPPING 1
+#ifndef EDGE_STEPPING
+    #define EDGE_STEPPING 0
+#endif
+
 
 typedef struct Face Face;
 struct Face
@@ -304,7 +312,7 @@ internal void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 w
 	}
 }
 
-internal void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u32 color)
+internal inline void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u32 color)
 {
 #if 0
 	u32 x_min = (u32)roundf(x);
@@ -373,7 +381,6 @@ inline Vec2F32 norm(Vec2F32 a)
     Vec2F32 result = {a.x * 1.0f / vlen, a.y * 1.0f / vlen};
     return result;
 }
-
 
 inline Vec2F32 vec_sub(Vec2F32 a, Vec2F32 b)
 {
@@ -758,6 +765,47 @@ internal void EndTime()
 {
 }
 #endif
+
+static inline b32 olivec_normalize_triangle(int width, int height, int x1, int y1, int x2, int y2, int x3, int y3, int *lx, int *hx, int *ly, int *hy)
+{
+    *lx = x1;
+    *hx = x1;
+    if (*lx > x2) *lx = x2;
+    if (*lx > x3) *lx = x3;
+    if (*hx < x2) *hx = x2;
+    if (*hx < x3) *hx = x3;
+    if (*lx < 0) *lx = 0;
+    if ((size_t) *lx >= width) return 0;;
+    if (*hx < 0) return 0;;
+    if ((size_t) *hx >= width) *hx = width-1;
+
+    *ly = y1;
+    *hy = y1;
+    if (*ly > y2) *ly = y2;
+    if (*ly > y3) *ly = y3;
+    if (*hy < y2) *hy = y2;
+    if (*hy < y3) *hy = y3;
+    if (*ly < 0) *ly = 0;
+    if ((size_t) *ly >= height) return 0;;
+    if (*hy < 0) return 0;;
+    if ((size_t) *hy >= height) *hy = height-1;
+
+    return 1;
+}
+
+static inline b32 olivec_barycentric(int x1, int y1, int x2, int y2, int x3, int y3, int xp, int yp, int *u1, int *u2, int *det)
+{
+    *det = ((x1 - x3)*(y2 - y3) - (x2 - x3)*(y1 - y3));
+    *u1  = ((y2 - y3)*(xp - x3) + (x3 - x2)*(yp - y3));
+    *u2  = ((y3 - y1)*(xp - x3) + (x1 - x3)*(yp - y3));
+    int u3 = *det - *u1 - *u2;
+    return (
+               (Sign(int, *u1) == Sign(int, *det) || *u1 == 0) &&
+               (Sign(int, *u2) == Sign(int, *det) || *u2 == 0) &&
+               (Sign(int, u3) == Sign(int, *det) || u3 == 0)
+           );
+}
+
 static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
 {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
@@ -1106,14 +1154,23 @@ UPDATE_AND_RENDER(update_and_render)
             Vec3 vv1_color = (Vec3) {0, 255, 0};
             Vec3 vv2_color = (Vec3) {0, 0, 255};
 
+            // CW
+            // this are valid when i do the flipping of y in the viewport mapping 
             // skewed
             //Vec4 v0_v4 = (Vec4) {-0.2, 0.2, 1.0, 1.0f};
             //Vec4 v1_v4 = (Vec4) {-0.4, 0.5, 1.2, 1.0f};
             //Vec4 v2_v4 = (Vec4) {-0.6, 0.2, 1.0, 1.0f};
             //center at origin
-            Vec4 v0_v4 = (Vec4) {0.0,  0.6, 35.0, 1.0f};
-            Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
-            Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
+            //Vec4 v0_v4 = (Vec4) {0.0,  0.7, 35.0, 1.0f};
+            //Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
+            //Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
+
+            //  CCW
+            Vec4 v0_v4 = (Vec4) {0.0,  0.7, 35.0, 1.0f};
+            Vec4 v1_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
+            Vec4 v2_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
+            // if i get them smaller i get a much better framerate!
+
 
             v0_v4 = mat4_mul_vec4(view, v0_v4);
             v1_v4 = mat4_mul_vec4(view, v1_v4);
@@ -1150,25 +1207,22 @@ UPDATE_AND_RENDER(update_and_render)
 
             // viewport mapping
 			v0_v4.x = (v0_v4.x * 0.5f + 0.5f) * buffer->width;
-			v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
-			v1_v4.x = (v1_v4.x * 0.5f + 0.5f) * buffer->width;
-			v1_v4.y = (1.0f - (v1_v4.y * 0.5f + 0.5f)) * buffer->height;
-			v2_v4.x = (v2_v4.x * 0.5f + 0.5f) * buffer->width;
-			v2_v4.y = (1.0f - (v2_v4.y * 0.5f + 0.5f)) * buffer->height;
+			//v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v0_v4.y = (v0_v4.y * 0.5f + 0.5f) * buffer->height;
 
+			v1_v4.x = (v1_v4.x * 0.5f + 0.5f) * buffer->width;
+			//v1_v4.y = (1.0f - (v1_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v1_v4.y = (v1_v4.y * 0.5f + 0.5f) * buffer->height;
+
+			v2_v4.x = (v2_v4.x * 0.5f + 0.5f) * buffer->width;
+			//v2_v4.y = (1.0f - (v2_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v2_v4.y = (v2_v4.y * 0.5f + 0.5f) * buffer->height;
+
+            // this is wrong later on when calculting the area
+            // without edge functions, because im mixing spaces, one is screen an another one is NDC depth
             Vec3 v0 = (Vec3) {v0_v4.x, v0_v4.y, v0_v4.z};
             Vec3 v1 = (Vec3) {v1_v4.x, v1_v4.y, v1_v4.z};
             Vec3 v2 = (Vec3) {v2_v4.x, v2_v4.y, v2_v4.z};
-            #if 0
-            {
-                Vec2F32 v0f = (Vec2F32) {v0_v4.x, v0_v4.y};
-                Vec2F32 v1f = (Vec2F32) {v1_v4.x, v1_v4.y};
-                Vec2F32 v2f = (Vec2F32) {v2_v4.x, v2_v4.y};
-
-                draw_triangle__scanline(buffer, v0f, v1f, v2f, red);
-            }
-
-            #else
             f32 minx = Min(Min(v0.x, v1.x), v2.x);
             f32 miny = Min(Min(v0.y, v1.y), v2.y);
             f32 maxx = Max(Max(v0.x, v1.x), v2.x);
@@ -1191,95 +1245,173 @@ UPDATE_AND_RENDER(update_and_render)
 
             float area = edge(s0, s1, s2);          // signed
             if (area == 0) return;                 // degenerate
-            for (u32 x = minx; x <= maxx; x++)
-            {
-                for (u32 y = miny; y <= maxy; y++)
-                {
-                    Vec2F32 p_v2 = (Vec2F32) {x, y};
-                    float w0 = edge(s1, s2, p_v2);
-                    float w1 = edge(s2, s0, p_v2);
-                    float w2 = edge(s0, s1, p_v2);
-                    // same sign test (works for both windings)
-                    if ((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0))
-                        continue;
-                    float inv_area = 1.0f / area;
-                    float b0 = w0 * inv_area;
-                    float b1 = w1 * inv_area;
-                    float b2 = w2 * inv_area;
-
-                    Vec3 p = (Vec3) {x, y, 0};
-                    Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
-                    Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
-                    Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
-                    f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
-                    f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
-                    f32 w = 1.0f - u - v;
-                    if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
-                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
-                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
-                        {
-                           continue; 
-                        }
-                    
-
-                    //Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
-                    //f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
-                    //Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
-
-                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
-                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+            float inv_area = 1.0f / area;
 
 
-                    u32 interpolated_color_to_u32 = 0;
+            #if EDGE_STEPPING
+            // edge stepping basically
+            // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
+            float e0_dx = (s2.y - s1.y);  float e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
+            float e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
+            float e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
 
-                    interpolated_color_to_u32 |= (0xFF << 24) |
-                        (((u32)final_color.x) & 0xFF) << 16 |
-                        (((u32)final_color.y) & 0xFF) << 8 |
-                        (((u32)final_color.z) & 0xFF) << 0;
-
-                    draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
-                }
-            }
-            #else
-
-            for (u32 x = minx; x <= maxx; x++)
-            {
-                for (u32 y = miny; y <= maxy; y++)
-                {
-                    Vec3 p = (Vec3) {x, y, 0};
-                    Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
-                    Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
-                    Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
-                    f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
-                    f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
-                    f32 w = 1.0f - u - v;
-                    if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
-                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
-                        vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
-                        {
-                           continue; 
-                        }
-                    
-
-                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
-                    f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
-                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
-
-                    u32 interpolated_color_to_u32 = 0;
-
-                    interpolated_color_to_u32 |= (0xFF << 24) |
-                        (((u32)final_color.x) & 0xFF) << 16 |
-                        (((u32)final_color.y) & 0xFF) << 8 |
-                        (((u32)final_color.z) & 0xFF) << 0;
-
-                    draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
-                }
-            }
+            // Evaluate at top-left of bbox (pixel center)
+            float start_x = (float)minx + 0.5f;
+            float start_y = (float)miny + 0.5f;
+            Vec2F32 p0 = { start_x, start_y };
+            float row_w0 = edge(s1, s2, p0);
+            float row_w1 = edge(s2, s0, p0);
+            float row_w2 = edge(s0, s1, p0);
             #endif
+
+            for (u32 i = 0; i <= 100; i++)
+            {
+                for (u32 y = miny; y <= maxy; y++)
+                {
+                    #if EDGE_STEPPING
+                    float w0 = row_w0;
+                    float w1 = row_w1;
+                    float w2 = row_w2;
+                    #endif
+
+                    for (u32 x = minx; x <= maxx; x++)
+                    {
+                        #if EDGE_STEPPING
+                            // if i remvoe this first condition it doesnt render anymore. So this is front-face culling
+                            //if (!((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0)))
+                            //if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                            if (!((w0 < 0 || w1 < 0 || w2 < 0)))
+                            {
+                                float b0 = w0 * inv_area;
+                                float b1 = w1 * inv_area;
+                                float b2 = w2 * inv_area;
+                                float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                                Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
+                                Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                                u32 interpolated_color_to_u32 = 0;
+
+                                interpolated_color_to_u32 |= (0xFF << 24) |
+                                    (((u32)final_color.x) & 0xFF) << 16 |
+                                    (((u32)final_color.y) & 0xFF) << 8 |
+                                    (((u32)final_color.z) & 0xFF) << 0;
+
+                                draw_pixel(buffer, x, y, interpolated_color_to_u32);
+                            }
+                        #else
+                            Vec2F32 p_v2 = (Vec2F32) {x, y};
+                            float w0 = edge(s1, s2, p_v2);
+                            float w1 = edge(s2, s0, p_v2);
+                            float w2 = edge(s0, s1, p_v2);
+                            // same sign test (works for both windings)
+                            if ((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0))
+                                continue;
+                            float b0 = w0 * inv_area;
+                            float b1 = w1 * inv_area;
+                            float b2 = w2 * inv_area;
+                            float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                            Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
+                            Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                            u32 interpolated_color_to_u32 = 0;
+
+                            interpolated_color_to_u32 |= (0xFF << 24) |
+                                (((u32)final_color.x) & 0xFF) << 16 |
+                                (((u32)final_color.y) & 0xFF) << 8 |
+                                (((u32)final_color.z) & 0xFF) << 0;
+
+                            draw_pixel(buffer, p_v2.x, p_v2.y, interpolated_color_to_u32);
+                        #endif
+                    #if EDGE_STEPPING
+                    w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
+                    #endif
+                    }
+                #if EDGE_STEPPING
+                row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step right
                 #endif
-            
+                }
+            }
+
+            #else
+                #if OLIVEC
+                    f32 z1 = v0.z / 1.0f;
+                    f32 z2 = v1.z / 1.0f;
+                    f32 z3 = v2.z / 1.0f;
+                    int lx, hx, ly, hy;
+                    //if(olivec_normalize_triangle(buffer->width, buffer->height, v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, &lx, &hx, &ly, &hy))
+                    {
+                        for (u32 i = 0; i <= 10; i++)
+                        {
+                            for (u32 y = miny; y <= maxy; y++)
+                            {
+                                for (u32 x = minx; x <= maxx; x++)
+                                {
+                                    int u1, u2, det;
+                                    if(olivec_barycentric(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, x, y, &u1, &u2, &det))
+                                    {
+                                        f32 inv_det = 1.0f / (f32)det;
+                                        f32 b0 = (f32)u1*inv_det;
+                                        f32 b1 = (f32)u2*inv_det;
+                                        //f32 b2 = (det - u1 - u2)*inv_det;
+                                        f32 b2 =  1.0f - b0 - b1;
+                                        float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+
+                                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
+                                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                                        u32 interpolated_color_to_u32 = 0;
+
+                                        interpolated_color_to_u32 |= (0xFF << 24) |
+                                            (((u32)final_color.x) & 0xFF) << 16 |
+                                            (((u32)final_color.y) & 0xFF) << 8 |
+                                            (((u32)final_color.z) & 0xFF) << 0;
+                                        draw_pixel(buffer, x, y, interpolated_color_to_u32);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                #else
+                    for (u32 i = 0; i <= 10; i++)
+                    {
+                        for (u32 x = minx; x <= maxx; x++)
+                        {
+                            for (u32 y = miny; y <= maxy; y++)
+                            {
+                                Vec3 p = (Vec3) {x, y, 0};
+                                Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
+                                Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
+                                Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
+                                f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
+                                f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
+                                f32 w = 1.0f - u - v;
+                                if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
+                                    vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
+                                    vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
+                                    {
+                                    continue; 
+                                    }
+                                
+
+                                Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
+                                f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
+                                Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                                u32 interpolated_color_to_u32 = 0;
+
+                                interpolated_color_to_u32 |= (0xFF << 24) |
+                                    (((u32)final_color.x) & 0xFF) << 16 |
+                                    (((u32)final_color.y) & 0xFF) << 8 |
+                                    (((u32)final_color.z) & 0xFF) << 0;
+
+                                draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
+                            }
+                        }
+                    }
+                #endif
+            #endif
         #endif
+            
         EndTime();
     }
     for (u32 i = 0; i < 20; i++)

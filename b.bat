@@ -8,8 +8,8 @@ del *.pdb > NUL 2> NUL
 echo [Compiling with msvc]
 echo Compiling game
 echo PDB > game-lock.temp
-set optimization=-Od
-call cl -FC -nologo -WX %optimization% -Zi -LDd ..\src\game.c /link -incremental:no -opt:ref /EXPORT:update_and_render
+set optimization=-O2
+call cl -FC -nologo -WX %optimization% -Zi -LD ..\src\game.c /link -incremental:no -opt:ref /EXPORT:update_and_render
 del game-lock.temp
 
 echo Compiling engine
