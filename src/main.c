@@ -16,6 +16,7 @@ global Arena *arena;
 static b32 g_running = 1;
 
 global Software_Render_Buffer *buffer;
+global Software_Depth_Buffer *depth_buffer;
 static HWND hwnd;
 static HDC hdc;
 
@@ -176,6 +177,23 @@ int main ()
 	buffer->info.bmiHeader.biClrUsed = 0;
 	buffer->info.bmiHeader.biClrImportant = 0;
 
+    depth_buffer = VirtualAlloc(0, sizeof(Software_Depth_Buffer), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    depth_buffer->width = buffer_width;
+    depth_buffer->height = buffer_height;
+    depth_buffer->data = VirtualAlloc(0, sizeof(u32) * buffer->width * buffer->height, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    
+    depth_buffer->info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	depth_buffer->info.bmiHeader.biWidth = buffer->width;
+	depth_buffer->info.bmiHeader.biHeight = -buffer->height;
+	depth_buffer->info.bmiHeader.biPlanes = 1;
+	depth_buffer->info.bmiHeader.biBitCount = sizeof(u32) * 8;
+	depth_buffer->info.bmiHeader.biCompression = BI_RGB;
+	depth_buffer->info.bmiHeader.biSizeImage = 0;
+	depth_buffer->info.bmiHeader.biXPelsPerMeter = 0;
+	depth_buffer->info.bmiHeader.biYPelsPerMeter = 0;
+	depth_buffer->info.bmiHeader.biClrUsed = 0;
+	depth_buffer->info.bmiHeader.biClrImportant = 0;
+
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
@@ -210,8 +228,9 @@ int main ()
         win32_process_pending_msgs();
 
         os_perform_hot_reload(&game_dll);
-        game_dll.app_update_and_render(buffer, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
+        game_dll.app_update_and_render(buffer, depth_buffer, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
         StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
+
     }
 }

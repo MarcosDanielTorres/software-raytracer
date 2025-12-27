@@ -125,6 +125,33 @@ Mat4 mat4_make_perspective_ori(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     return m;
 }
 
+Mat4 mat4_make_reverse_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) 
+{
+    f32 g = 1.0f / tan(fov * 0.5);
+    f32 k = znear / (znear - zfar);
+    Mat4 m = {{{ 0 }}};
+    m.m[0][0] = g / aspect;
+    m.m[1][1] = g;
+    m.m[2][2] = k;
+    m.m[2][3] = -zfar * k;
+    m.m[3][2] = 1.0;
+    return m;
+}
+
+Mat4 mat4_make_reverse_infinite_perspective(f32 fov, f32 aspect, f32 znear, f32 e)
+{ 
+    f32 g = 1.0f / tan(fov * 0.5);
+    Mat4 m = {{{ 0 }}};
+    m.m[0][0] = g / aspect;
+    m.m[1][1] = g;
+    m.m[2][2] = e;
+    m.m[2][3] = znear * (1.0f - e);
+    m.m[3][2] = 1.0;
+    return m;
+
+}
+
+
 Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     f32 g = 1.0f / tan(fov * 0.5);
     f32 k = zfar / (zfar - znear);

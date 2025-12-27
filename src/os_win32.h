@@ -9,6 +9,14 @@ struct Software_Render_Buffer
     u32 *data;
 };
 
+struct Software_Depth_Buffer
+{
+    i32 width;
+    i32 height;
+    BITMAPINFO info;
+    u32 *data;
+};
+
 typedef struct OS_W32_Window OS_W32_Window;
 struct OS_W32_Window
 {

@@ -6,7 +6,8 @@ struct OS_Handle
 };
 
 typedef struct Software_Render_Buffer Software_Render_Buffer;
-#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, f32 total_time, f32 dt)
+typedef struct Software_Depth_Buffer Software_Depth_Buffer;
+#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, f32 total_time, f32 dt)
 typedef UPDATE_AND_RENDER(Update_And_Render);
 UPDATE_AND_RENDER(update_and_render_stub)
 {

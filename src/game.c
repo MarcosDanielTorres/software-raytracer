@@ -7,6 +7,16 @@
 #include "timer.c"
 #include <assert.h>
 
+#define REVERSE_DEPTH_VALUE 1
+#ifndef REVERSE_DEPTH_VALUE
+    #define REVERSE_DEPTH_VALUE 0  
+#endif
+
+#define SHOW_DEPTH_BUFFER 1
+#ifndef SHOW_DEPTH_BUFFER
+    #define SHOW_DEPTH_BUFFER 0  
+#endif
+#define FLIPPED_Y 1
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 1
 
@@ -811,7 +821,20 @@ static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
+static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
+{
 
+    #if REVERSE_DEPTH_VALUE
+    memset((void*)buffer->data, 0x00, buffer->width * buffer->height * 4);
+    #else
+    memset((void*)buffer->data, 0xFF, buffer->width * buffer->height * 4);
+    #endif
+}
+
+static inline clear_screen(Software_Render_Buffer *buffer, u32 color)
+{
+    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, color);
+}
 
 UPDATE_AND_RENDER(update_and_render)
 {
@@ -875,7 +898,8 @@ UPDATE_AND_RENDER(update_and_render)
     u32 yellow = green | red;
     u32 steam_chat_background_color = 0xff1e2025;
     //draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff111f0f);
-    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, steam_chat_background_color);
+    clear_screen(buffer, steam_chat_background_color);
+    clear_depth_buffer(depth_buffer);
     
     local_persist f32 accum_dt = 0;
     local_persist f32 angle = 0;
@@ -901,7 +925,38 @@ UPDATE_AND_RENDER(update_and_render)
     f32 znear = 1.0f;
     f32 zfar = 50.0f;
     f32 k = zfar / (zfar - znear);
+    #if REVERSE_DEPTH_VALUE
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
+    // TODO fix this shit i dont see the good depth values. just a retarded invertion 
+    Mat4 persp = mat4_make_reverse_infinite_perspective(fov, aspect, znear, zfar);
+    persp = mat4_make_perspective(fov, aspect, znear, zfar);
+    //persp = mat4_make_reverse_perspective(fov, aspect, znear, zfar);
+    Mat4 persp_normal = mat4_make_perspective(fov, aspect, znear, zfar);
+
+    f32 hdp = 2*znear;
+    printf("Normal Projection Value Z=%.2f: %.2f\n" , hdp, ((persp_normal.m[2][2]*hdp + persp_normal.m[2][3]) / hdp));
+    printf("Reversed Projection Value Z=%.2f: %.2f\n" , hdp, ((persp.m[2][2]*hdp + persp.m[2][3]) / hdp));
+
+    hdp = (zfar - znear) * 0.5f;
+    printf("Normal Projection Value Z=%.2f: %.2f\n" , hdp, ((persp_normal.m[2][2]*hdp + persp_normal.m[2][3]) / hdp));
+    printf("Reversed Projection Value Z=%.2f: %.2f\n" , hdp, ((persp.m[2][2]*hdp + persp.m[2][3]) / hdp));
+
+    hdp = zfar - 0.00032f;
+    printf("Normal Projection Value Z=%.2f: %.2f\n" , hdp, ((persp_normal.m[2][2]*hdp + persp_normal.m[2][3]) / hdp));
+    printf("Reversed Projection Value Z=%.2f: %.2f\n" , hdp, ((persp.m[2][2]*hdp + persp.m[2][3]) / hdp));
+
+    hdp = (zfar - znear) * 0.212f;
+    printf("Normal Projection Value Z=%.2f: %.2f\n" , hdp, ((persp_normal.m[2][2]*hdp + persp_normal.m[2][3]) / hdp));
+    printf("Reversed Projection Value Z=%.2f: %.2f\n" , hdp, ((persp.m[2][2]*hdp + persp.m[2][3]) / hdp));
+
+    #else
     Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+    #endif
 
     // rolled perspective
     f32 g = 1.0f / tan(fov * 0.5f);
@@ -1166,7 +1221,7 @@ UPDATE_AND_RENDER(update_and_render)
             //Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
 
             //  CCW
-            Vec4 v0_v4 = (Vec4) {0.0,  0.7, 35.0, 1.0f};
+            Vec4 v0_v4 = (Vec4) {0.0,  0.7, 50.0, 1.0f};
             Vec4 v1_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
             Vec4 v2_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
             // if i get them smaller i get a much better framerate!
@@ -1205,18 +1260,30 @@ UPDATE_AND_RENDER(update_and_render)
             }
 
 
+            // DONE flip it it viewport space to see if the culling holds for sign area which shouldnt
+            //  - yes it changes the sign of the area, pretty cool!
+
             // viewport mapping
+            #if FLIPPED_Y
 			v0_v4.x = (v0_v4.x * 0.5f + 0.5f) * buffer->width;
-			//v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
+			v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
+
+			v1_v4.x = (v1_v4.x * 0.5f + 0.5f) * buffer->width;
+			v1_v4.y = (1.0f - (v1_v4.y * 0.5f + 0.5f)) * buffer->height;
+
+			v2_v4.x = (v2_v4.x * 0.5f + 0.5f) * buffer->width;
+			v2_v4.y = (1.0f - (v2_v4.y * 0.5f + 0.5f)) * buffer->height;
+            #else
+
+			v0_v4.x = (v0_v4.x * 0.5f + 0.5f) * buffer->width;
 			v0_v4.y = (v0_v4.y * 0.5f + 0.5f) * buffer->height;
 
 			v1_v4.x = (v1_v4.x * 0.5f + 0.5f) * buffer->width;
-			//v1_v4.y = (1.0f - (v1_v4.y * 0.5f + 0.5f)) * buffer->height;
 			v1_v4.y = (v1_v4.y * 0.5f + 0.5f) * buffer->height;
 
 			v2_v4.x = (v2_v4.x * 0.5f + 0.5f) * buffer->width;
-			//v2_v4.y = (1.0f - (v2_v4.y * 0.5f + 0.5f)) * buffer->height;
 			v2_v4.y = (v2_v4.y * 0.5f + 0.5f) * buffer->height;
+            #endif
 
             // this is wrong later on when calculting the area
             // without edge functions, because im mixing spaces, one is screen an another one is NDC depth
@@ -1227,8 +1294,6 @@ UPDATE_AND_RENDER(update_and_render)
             f32 miny = Min(Min(v0.y, v1.y), v2.y);
             f32 maxx = Max(Max(v0.x, v1.x), v2.x);
             f32 maxy = Max(Max(v0.y, v1.y), v2.y);
-            //draw_pixel(buffer, minx, miny, white);
-            //draw_pixel(buffer, maxx, maxy, white);
 
 			vv0_color = vec3_scalar(vv0_color, inv_w0);
 			vv1_color = vec3_scalar(vv1_color, inv_w1);
@@ -1279,24 +1344,52 @@ UPDATE_AND_RENDER(update_and_render)
                         #if EDGE_STEPPING
                             // if i remvoe this first condition it doesnt render anymore. So this is front-face culling
                             //if (!((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0)))
-                            //if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                            #if FLIPPED_Y
+                            // this only works is flipped_y == 1
+                            if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                            #else
+                            // this only works is flipped_y == 0
                             if (!((w0 < 0 || w1 < 0 || w2 < 0)))
+                            #endif
                             {
                                 float b0 = w0 * inv_area;
                                 float b1 = w1 * inv_area;
                                 float b2 = w2 * inv_area;
-                                float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-                                Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
-                                Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+                                f32 depth = b0 * v0_v4.z + b1 * v1_v4.z + b2 * v2_v4.z;
+                                #if REVERSE_DEPTH_VALUE
+                                if(depth > depth_buffer->data[y * buffer->width + x])
+                                #else
+                                if(depth < depth_buffer->data[y * buffer->width + x])
+                                #endif
+                                {
+                                    depth_buffer->data[y * buffer->width + x] = depth;
+                                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, b0), vec3_scalar(vv1_color, b1)), vec3_scalar(vv2_color, b2));
+                                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
 
-                                u32 interpolated_color_to_u32 = 0;
+                                    u32 interpolated_color_to_u32 = 0;
 
-                                interpolated_color_to_u32 |= (0xFF << 24) |
-                                    (((u32)final_color.x) & 0xFF) << 16 |
-                                    (((u32)final_color.y) & 0xFF) << 8 |
-                                    (((u32)final_color.z) & 0xFF) << 0;
+                                    interpolated_color_to_u32 |= (0xFF << 24) |
+                                        (((u32)final_color.x) & 0xFF) << 16 |
+                                        (((u32)final_color.y) & 0xFF) << 8 |
+                                        (((u32)final_color.z) & 0xFF) << 0;
 
-                                draw_pixel(buffer, x, y, interpolated_color_to_u32);
+                                    draw_pixel(buffer, x, y, interpolated_color_to_u32);
+
+                                    #if SHOW_DEPTH_BUFFER
+                                    //float z_linear =  zfar / depth;
+                                    //float v = Clamp((z_linear - znear) / (zfar - znear), 0, 1);
+
+                                    u32 interpolated_depth_to_u32 = 0;
+                                    interpolated_depth_to_u32 |= (0xFF << 24) |
+                                     (((u32)(depth * 255.0f)) & 0xFF) << 16 |
+                                     (((u32)(depth * 255.0f)) & 0xFF) << 8 |
+                                     (((u32)(depth * 255.0f)) & 0xFF) << 0; 
+
+
+                                    draw_pixel(buffer, x, y, interpolated_depth_to_u32);
+                                    #endif
+                                }
                             }
                         #else
                             Vec2F32 p_v2 = (Vec2F32) {x, y};
