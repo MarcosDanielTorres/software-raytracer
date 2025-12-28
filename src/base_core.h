@@ -32,3 +32,4 @@ typedef uint32_t b32;
 #define ClampBot(a, b) (Max(a, b))
 #define ClampTop(a, b) (Min(a, b))
 #define Clamp(a, b, c) (ClampTop(ClampBot(a, b), c))
+#define ArrayCount(a) (sizeof(a) / sizeof(*a))

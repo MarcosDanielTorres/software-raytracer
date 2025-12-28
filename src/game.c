@@ -7,23 +7,23 @@
 #include "timer.c"
 #include <assert.h>
 
-#define REVERSE_DEPTH_VALUE 1
+#define REVERSE_DEPTH_VALUE 0
 #ifndef REVERSE_DEPTH_VALUE
     #define REVERSE_DEPTH_VALUE 0  
 #endif
 
-#define SHOW_DEPTH_BUFFER 1
+#define SHOW_DEPTH_BUFFER 0
 #ifndef SHOW_DEPTH_BUFFER
     #define SHOW_DEPTH_BUFFER 0  
 #endif
-#define FLIPPED_Y 1
+#define FLIPPED_Y 0
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 1
 
-#define EDGE_FUNCTIONS 1
-#define OLIVEC 0
+#define EDGE_FUNCTIONS 0
+#define OLIVEC 1
 
-#define EDGE_STEPPING 1
+#define EDGE_STEPPING 0
 #ifndef EDGE_STEPPING
     #define EDGE_STEPPING 0
 #endif
@@ -1312,7 +1312,6 @@ UPDATE_AND_RENDER(update_and_render)
             if (area == 0) return;                 // degenerate
             float inv_area = 1.0f / area;
 
-
             #if EDGE_STEPPING
             // edge stepping basically
             // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
@@ -1329,7 +1328,7 @@ UPDATE_AND_RENDER(update_and_render)
             float row_w2 = edge(s0, s1, p0);
             #endif
 
-            for (u32 i = 0; i <= 100; i++)
+            for (u32 i = 0; i <= 10; i++)
             {
                 for (u32 y = miny; y <= maxy; y++)
                 {
@@ -1467,9 +1466,9 @@ UPDATE_AND_RENDER(update_and_render)
                 #else
                     for (u32 i = 0; i <= 10; i++)
                     {
-                        for (u32 x = minx; x <= maxx; x++)
+                        for (u32 y = miny; y <= maxy; y++)
                         {
-                            for (u32 y = miny; y <= maxy; y++)
+                            for (u32 x = minx; x <= maxx; x++)
                             {
                                 Vec3 p = (Vec3) {x, y, 0};
                                 Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
