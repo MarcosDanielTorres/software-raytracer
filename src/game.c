@@ -543,6 +543,45 @@ struct Params
     Software_Depth_Buffer *depth_buffer;
 };
 
+#if 0
+internal void naive(Params *params)
+{
+    for (u32 y = miny; y <= maxy; y++)
+    {
+        for (u32 x = minx; x <= maxx; x++)
+        {
+            Vec3 p = (Vec3) {x, y, 0};
+            Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
+            Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
+            Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
+            f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
+            f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
+            f32 w = 1.0f - u - v;
+            if (vec3_dot(plane_normal_of_triangle, area_subtriangle_v1v2p) < 0 ||
+                vec3_dot(plane_normal_of_triangle, area_subtriangle_v2v0p) < 0 ||
+                vec3_dot(plane_normal_of_triangle, area_subtriangle_v0v1p) < 0 ) 
+                {
+                continue; 
+                }
+            
+
+            Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(vv0_color, u), vec3_scalar(vv1_color, v)), vec3_scalar(vv2_color, w));
+            f32 inv_w_interp = u * inv_w0 + v * inv_w1 + w * inv_w2;
+            Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+            u32 interpolated_color_to_u32 = 0;
+
+            interpolated_color_to_u32 |= (0xFF << 24) |
+                (((u32)final_color.x) & 0xFF) << 16 |
+                (((u32)final_color.y) & 0xFF) << 8 |
+                (((u32)final_color.z) & 0xFF) << 0;
+
+            draw_pixel(buffer, p.x, p.y, interpolated_color_to_u32);
+        }
+    }
+}
+    #endif
+
 internal void olivec_params(Params *params)
 {
     Vec3 v0 = params->v0;
@@ -558,38 +597,43 @@ internal void olivec_params(Params *params)
     f32 maxx = params->maxx;
     f32 miny = params->miny;
     f32 maxy = params->maxy;
-    for (u32 y = miny; y <= maxy; y++)
+    int lx, hx, ly, hy;
+    if(olivec_normalize_triangle(params->buffer->width, params->buffer->height, v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, &lx, &hx, &ly, &hy))
     {
-        for (u32 x = minx; x <= maxx; x++)
+        for (u32 y = ly; y <= hy; y++)
         {
-            int u1, u2, det;
-            if(olivec_barycentric(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, x, y, &u1, &u2, &det))
+            for (u32 x = lx; x <= hx; x++)
             {
-                f32 inv_det = 1.0f / (f32)det;
-                f32 b0 = (f32)u1*inv_det;
-                f32 b1 = (f32)u2*inv_det;
-                //f32 b2 = (det - u1 - u2)*inv_det;
-                f32 b2 =  1.0f - b0 - b1;
-                float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-
-                f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w0;
-                if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                int u1, u2, det;
+                if(olivec_barycentric(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, x, y, &u1, &u2, &det))
                 {
-                    params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                    f32 inv_det = 1.0f / (f32)det;
+                    f32 b0 = (f32)u1*inv_det;
+                    f32 b1 = (f32)u2*inv_det;
+                    //f32 b2 = (det - u1 - u2)*inv_det;
+                    f32 b2 =  1.0f - b0 - b1;
+                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
 
-                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
-                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
 
-                    u32 interpolated_color_to_u32 = 0;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
 
-                    interpolated_color_to_u32 |= (0xFF << 24) |
-                        (((u32)final_color.x) & 0xFF) << 16 |
-                        (((u32)final_color.y) & 0xFF) << 8 |
-                        (((u32)final_color.z) & 0xFF) << 0;
-                    draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
                 }
             }
         }
+
     }
 }
 
@@ -613,23 +657,20 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
     Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
     f32 area = edge(s0, s1, s2);          // signed
-    #if FLIPPED_Y
-    if (area >= 0)
+    #if 0
+    if (area < 0.0f)
     {
-        // area == 0 degneerate
-        // area > CW
-        discarded++;
-        return;                 
+        
+        Swap(v1, v2);
+        Swap(v1_color, v2_color);
+        Swap(inv_w1, inv_w2);
+
+        Swap(s1, s2);
+
+        area = -area;
     }
-    #else
-    if (area <= 0)
-    {
-        // area == 0 degneerate
-        // area > CW
-        discarded++;
-        return;                 
-    }
-    #endif
+        #endif
+
     f32 inv_area = 1.0f / area;
     // edge stepping basically
     // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
@@ -664,7 +705,7 @@ internal void barycentric_with_edge_stepping(Params *params)
                     (e0_inc ? w0 >= 0.f : w0 > eps) &&
                     (e1_inc ? w1 >= 0.f : w1 > eps) &&
                     (e2_inc ? w2 >= 0.f : w2 > eps);
-                if (!inside)
+                if (inside)
                 {
                     #if 0
                     #if FLIPPED_Y
@@ -851,8 +892,8 @@ UPDATE_AND_RENDER(update_and_render)
         BeginTime("rendering models", 1);
         #if 1
         {
-            //for (u32 entity = 0; entity < entity_count; entity++)
-            for (u32 entity = 0; entity < 1; entity++)
+            for (u32 entity = 0; entity < entity_count; entity++)
+            //for (u32 entity = 0; entity < 1; entity++)
             {
                 Entity* e = entities + entity;
                 Obj_Model *model = e->model;
@@ -1068,8 +1109,8 @@ UPDATE_AND_RENDER(update_and_render)
                             f32 maxy = Max(Max(v0.y, v1.y), v2.y);
 
                             Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
-                            Vec3 new_vv1_color = vec3_scalar(vv0_color, inv_w1);
-                            Vec3 new_vv2_color = vec3_scalar(vv0_color, inv_w2);
+                            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+                            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
 
                             /////draw_triangle__scanline(buffer, v0, v1, v2, color);
                             Params params = {view, persp, v0, v1, v2, new_vv0_color, new_vv1_color, new_vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
@@ -1077,6 +1118,7 @@ UPDATE_AND_RENDER(update_and_render)
                             params.depth_buffer = depth_buffer;
                             barycentric_with_edge_stepping(&params);
                             //olivec_params(&params);
+                            //naive()
 
                             //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
                             

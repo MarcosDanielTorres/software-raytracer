@@ -108,6 +108,8 @@ int main ()
 
     i32 buffer_width = 640;
     i32 buffer_height = 480;
+    buffer_width = window_width;
+    buffer_height = window_height;
     //buffer_width = 1920;
     //buffer_height = 1080;
     WNDCLASSEXW wnd_class = 
