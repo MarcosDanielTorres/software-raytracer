@@ -18,7 +18,7 @@
 #ifndef SHOW_DEPTH_BUFFER
     #define SHOW_DEPTH_BUFFER 0  
 #endif
-#define FLIPPED_Y 0
+#define FLIPPED_Y 1
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 1
 
@@ -31,6 +31,7 @@
 #endif
 
 
+global u32 discarded;
 f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
 {
     f32 t = (val - src_range_x) / (src_range_y - src_range_x);
@@ -494,6 +495,11 @@ static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
+static inline b32 is_top_left(Vec2F32 a, Vec2F32 b)
+{
+    return (a.y > b.y) || (a.y == b.y && a.x < b.x);
+}
+
 static inline b32 is_top_left_edge(float dx, float dy)
 {
     return (dy > 0) || (dy == 0 && dx < 0);
@@ -566,7 +572,7 @@ internal void olivec_params(Params *params)
                 f32 b2 =  1.0f - b0 - b1;
                 float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
 
-                f32 depth = b0 * v0.z + b1 * v1.z + b2 * v2.z;
+                f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w0;
                 if(depth < params->depth_buffer->data[y * params->buffer->width + x])
                 {
                     params->depth_buffer->data[y * params->buffer->width + x] = depth;
@@ -603,67 +609,104 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 miny = params->miny;
     f32 maxy = params->maxy;
 
-    Vec2F32 s0 = { v0.x, v0.y };
-    Vec2F32 s1 = { v1.x, v1.y };
-    Vec2F32 s2 = { v2.x, v2.y };
-    float area = edge(s0, s1, s2);          // signed
-    if (area == 0) return;                 // degenerate
-    if (area > 0) return;                 // degenerate
-    float inv_area = 1.0f / area;
+    Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
+    Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
+    Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    f32 area = edge(s0, s1, s2);          // signed
+    #if FLIPPED_Y
+    if (area >= 0)
+    {
+        // area == 0 degneerate
+        // area > CW
+        discarded++;
+        return;                 
+    }
+    #else
+    if (area <= 0)
+    {
+        // area == 0 degneerate
+        // area > CW
+        discarded++;
+        return;                 
+    }
+    #endif
+    f32 inv_area = 1.0f / area;
     // edge stepping basically
     // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
-    float e0_dx = (s2.y - s1.y);  float e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
-    float e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
-    float e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
+    f32 e0_dx = (s2.y - s1.y);  float e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
+    f32 e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
+    f32 e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
 
     // Evaluate at top-left of bbox (pixel center)
-    float start_x = (float)minx + 0.5f;
-    float start_y = (float)miny + 0.5f;
+    f32 start_x = (float)minx + 0.5f;
+    f32 start_y = (float)miny + 0.5f;
     Vec2F32 p0 = { start_x, start_y };
-    float row_w0 = edge(s1, s2, p0);
-    float row_w1 = edge(s2, s0, p0);
-    float row_w2 = edge(s0, s1, p0);
+    f32 row_w0 = edge(s1, s2, p0);
+    f32 row_w1 = edge(s2, s0, p0);
+    f32 row_w2 = edge(s0, s1, p0);
 
+    b32 e0_inc = is_top_left(s1, s2);
+    b32 e1_inc = is_top_left(s2, s0);
+    b32 e2_inc = is_top_left(s0, s1);
+
+    const f32 eps = -1e-4f;
     int lx, hx, ly, hy;
     {
         for (u32 y = miny; y < maxy; y++)
         {
-            float w0 = row_w0;
-            float w1 = row_w1;
-            float w2 = row_w2;
+            f32 w0 = row_w0;
+            f32 w1 = row_w1;
+            f32 w2 = row_w2;
 
             for (u32 x = minx; x < maxx; x++)
             {
-                if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                b32 inside =
+                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+                    (e2_inc ? w2 >= 0.f : w2 > eps);
+                if (!inside)
                 {
-                    float b0 = w0 * inv_area;
-                    float b1 = w1 * inv_area;
-                    float b2 = w2 * inv_area;
-                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
-                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    #if 0
+                    #if FLIPPED_Y
+                    // this only works is flipped_y == 1
+                    if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                    #else
+                    // this only works is flipped_y == 0
+                    if (!((w0 < 0 || w1 < 0 || w2 < 0)))
+                    #endif
+                    #endif
                     {
-                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
-                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
-                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+                        // area here is always less than 0
+                        //printf("%d\n", area > 0 ? 1 : 0);
+                        f32 b0 = w0 * inv_area;
+                        f32 b1 = w1 * inv_area;
+                        f32 b2 = w2 * inv_area;
+                        f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                        f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                        if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                        {
+                            params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                            Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                            Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
 
-                        u32 interpolated_color_to_u32 = 0;
+                            u32 interpolated_color_to_u32 = 0;
 
-                        interpolated_color_to_u32 |= (0xFF << 24) |
-                            (((u32)final_color.x) & 0xFF) << 16 |
-                            (((u32)final_color.y) & 0xFF) << 8 |
-                            (((u32)final_color.z) & 0xFF) << 0;
+                            interpolated_color_to_u32 |= (0xFF << 24) |
+                                (((u32)final_color.x) & 0xFF) << 16 |
+                                (((u32)final_color.y) & 0xFF) << 8 |
+                                (((u32)final_color.z) & 0xFF) << 0;
 
-                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                            draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
 
-                    }
-                    }
-                w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
+                        }
+                        }
                 }
-            row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step right
+                w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
             }
+        row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
         }
     }
+}
 
 UPDATE_AND_RENDER(update_and_render)
 {
@@ -675,22 +718,22 @@ UPDATE_AND_RENDER(update_and_render)
         const char *filename = ".\\obj\\african_head\\african_head.obj";
         OS_FileReadResult obj = os_file_read(filename);
         model_african_head = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.face_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.face_count);
 
         filename = ".\\obj\\teapot.obj";
         obj = os_file_read(filename);
         model_teapot = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count);
 
         filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
         obj = os_file_read(filename);
         model_diablo = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.face_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.face_count);
 
         filename = ".\\obj\\f117.obj";
         obj = os_file_read(filename);
         model_f117 = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.face_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.face_count);
         
         {
             entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.8, 3} };
@@ -803,6 +846,7 @@ UPDATE_AND_RENDER(update_and_render)
     Vec3 vv0_color = (Vec3) {255, 0, 0};
     Vec3 vv1_color = (Vec3) {0, 255, 0};
     Vec3 vv2_color = (Vec3) {0, 0, 255};
+    discarded = 0;
     {
         BeginTime("rendering models", 1);
         #if 1
@@ -851,9 +895,9 @@ UPDATE_AND_RENDER(update_and_render)
                         #endif
                         
                         // World space
-                        v0 = vec3_scalar(v0, 0.5f);
-                        v1 = vec3_scalar(v1, 0.5f);
-                        v2 = vec3_scalar(v2, 0.5f);
+                        v0 = vec3_scalar(v0, 0.2f);
+                        v1 = vec3_scalar(v1, 0.2f);
+                        v2 = vec3_scalar(v2, 0.2f);
                         
                         v0.x += e->position.x;
                         v0.y += e->position.y;
@@ -896,7 +940,7 @@ UPDATE_AND_RENDER(update_and_render)
                         {
                             // cull
                             //color = blue;
-                            continue;
+                            //continue;
                         }
                         else
                         {
@@ -1005,16 +1049,17 @@ UPDATE_AND_RENDER(update_and_render)
 
 
                             v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-                            v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
-                            //v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
-
                             v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-                            v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
-                            //v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
-
                             v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+                            #if FLIPPED_Y
+                            v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+                            v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
                             v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
-                            //v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+                            #else
+                            v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+                            v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+                            v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+                            #endif
 
                             
                             f32 minx = Min(Min(v0.x, v1.x), v2.x);
@@ -1023,8 +1068,8 @@ UPDATE_AND_RENDER(update_and_render)
                             f32 maxy = Max(Max(v0.y, v1.y), v2.y);
 
                             Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
-                            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
-                            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+                            Vec3 new_vv1_color = vec3_scalar(vv0_color, inv_w1);
+                            Vec3 new_vv2_color = vec3_scalar(vv0_color, inv_w2);
 
                             /////draw_triangle__scanline(buffer, v0, v1, v2, color);
                             Params params = {view, persp, v0, v1, v2, new_vv0_color, new_vv1_color, new_vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
@@ -1042,7 +1087,6 @@ UPDATE_AND_RENDER(update_and_render)
                     }
                 }
             }
-
         }
         #else
 
@@ -1362,6 +1406,7 @@ UPDATE_AND_RENDER(update_and_render)
         anchors[i].result = 0;
         anchors[i].count = 0;
     }
+    printf("Discarded trigs: %d of %d total trigs\n", discarded, model_teapot.face_count);
     //LONGLONG model_end = timer_get_os_time();
     //LONGLONG result = model_end - model_now;
     
