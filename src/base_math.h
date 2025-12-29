@@ -74,6 +74,63 @@ inline Vec3 vec3_normalize(Vec3 a)
     return result;
 }
 
+inline Vec3 vec3_rotate_y(Vec3 p, f32 c, f32 s)
+{
+    Vec3 result = {0};
+    
+    //f32 c = cos(angle);
+    //f32 s = sin(angle);
+    
+    result.x = p.x * c + p.z * s;
+    result.y = p.y;
+    result.z = -p.x * s + p.z * c;
+    
+    //result.x = p.x;
+    //result.y = p.y * c - p.z * s;
+    //result.z = p.y * s + p.z * c;
+    
+    
+    return result;
+}
+
+inline Vec3 vec3_rotate_x(Vec3 p, f32 c, f32 s)
+{
+    Vec3 result = {0};
+    
+    //f32 c = cos(angle);
+    //f32 s = sin(angle);
+    
+    result.x = p.x;
+    result.z = p.z * c + p.x * s;
+    result.y = -p.z * s + p.y * c;
+    
+    //result.x = p.x;
+    //result.y = p.y * c - p.z * s;
+    //result.z = p.y * s + p.z * c;
+    
+    
+    return result;
+}
+
+inline Vec3 vec3_rotate_z(Vec3 p, f32 c, f32 s)
+{
+    Vec3 result = {0};
+    
+    //f32 c = cos(angle);
+    //f32 s = sin(angle);
+    
+    result.x = p.x * c + p.y * s;
+    result.y = -p.x * s + p.y * c;
+    result.z = p.z;
+    
+    //result.x = p.x;
+    //result.y = p.y * c - p.z * s;
+    //result.z = p.y * s + p.z * c;
+    
+    
+    return result;
+}
+
 typedef struct Point3D Point3D;
 struct Point3D
 {

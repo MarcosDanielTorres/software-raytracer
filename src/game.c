@@ -1,10 +1,12 @@
 #include "base_core.h"
 #include "base_os.h"
 #include "os_win32.h"
+// TODO this order aint nice, fix it
 #include "timer.h"
 #include "os_win32.c"
 #include "base_math.h"
 #include "timer.c"
+#include "obj.h"
 #include <assert.h>
 
 #define REVERSE_DEPTH_VALUE 0
@@ -28,273 +30,6 @@
     #define EDGE_STEPPING 0
 #endif
 
-
-typedef struct Face Face;
-struct Face
-{
-    // vvv,vtvtvt,vnvnvn
-    int packed_data[9];
-    int v[3];
-    int vt[3];
-    int vn[3];
-};
-
-typedef struct Obj_Model Obj_Model;
-struct Obj_Model
-{
-    Vec3 *points;
-    int points_count;
-    Face *faces;
-    int faces_count;
-    b32 is_valid;
-    b32 has_normals;
-};
-
-inline b32 is_digit(char c)
-{
-    return c >= '0' && c <= '9';
-}
-
-Obj_Model parse_obj(char *buf, size_t size)
-{
-    LONGLONG start = timer_get_os_time();
-    //aim_profiler_time_function;
-    Obj_Model model = {0};
-    if(size == 0)
-    {
-        return model;
-    }
-    model.points = (Vec3*)malloc(sizeof(Vec3) * 9000);
-    model.faces = (Face*)malloc(sizeof(Face) * 9000);
-    char* at = buf;
-    while (*at == ' ' || *at == '\r' || *at == '\n')
-    {
-        at++;
-    }
-    
-    while (*at != '\0')
-    {
-		switch (*at)
-		{
-			case 'v': {
-				at++;
-                switch(*at)
-                {
-                    case ' ':
-                    {
-                        f32 coords[3];
-                        f32 coords2[3];
-                        int i = 0;
-                        while(i < 3)
-                        {
-                            at++;
-                            char *start = at;
-#if 0
-                            f32 a = 0;
-                            b32 found = 0;
-                            int past_point = 0;
-                            int inc = 1;
-                            b32 scientific_notation = 0;
-                            f32 sign = 1;
-                            if (*at == '-')
-                            {
-                                sign = -1;
-                            }
-                            while (*at != '\n' && *at != '\0' && *at != ' ')
-                            {
-                                if (is_digit(*at))
-                                {
-                                    a *= 10.0f;
-                                    a += (f32)(*at - '0');
-                                    if (found)
-                                        inc *= 10;
-                                    
-                                }
-                                if(*at == 'e' || *at == 'E')
-                                {
-                                    scientific_notation = 1;
-                                    break;
-                                }
-                                if (*at == '.')
-                                {
-                                    found = 1;
-                                }
-                                at++;
-                            }
-                            if (found)
-                            {
-                                a = a / inc;
-                            }
-                            a *= sign;
-
-                            if (scientific_notation)
-                            {
-                                at++;
-                                // assuming + is 0
-                                b32 scientific_notation_sign = 0;
-                                if(*at == '-')
-                                {
-                                    scientific_notation_sign = 1;
-                                    at++;
-                                }
-                                else if(*at == '+')
-                                {
-                                    at++;
-                                }
-
-                                while(*at == '0')
-                                {
-                                    at++;
-                                }
-                                u32 exponent = 0;
-                                while(*at != '\n' && *at != ' ' && *at != '\0')
-                                {
-                                    if(is_digit(*at))
-                                    {
-                                       exponent *= 10;
-                                       exponent += (u32)(*at - '0');
-                                    }
-                                    at++;
-                                }
-                                u32 divisor = 1;
-                                for(u32 i = 0; i < exponent; i++)
-                                {
-                                   divisor *= 10; 
-                                }
-
-                                if(scientific_notation_sign == 0)
-                                {
-                                    a *= divisor;
-                                }
-                                else
-                                {
-                                    a /= divisor;
-                                }
-                            }
-                            coords[i] = a;
-#else
-                            
-                            
-                            f32 num;
-                            char *pEnd;
-                            num = strtof(start, &pEnd);
-                            at = pEnd;
-                            //coords2[i] = num;
-                            coords[i] = num;
-#endif
-                            int x = 321;
-                            //sscanf(start, "%f", &num);
-                            i++;
-                        }
-                        at++;
-                        model.points_count++;
-                        model.points[model.points_count] = (Vec3){coords[0], coords[1], coords[2]};
-                        //printf("v %.7f %.7f %.7f\n", coords[0], coords[1], coords[2]);
-                        //printf("v %.7f %.7f %.7f\n", coords2[0], coords2[1], coords2[2]);
-                    }break;
-                    default:
-                    {
-                        at++;
-                    }
-			    } break;
-            }
-			case 'f': {
-				at+=2;
-				Face face;
-                int* v = face.v;
-				int* vt = face.vt;
-				int* vn = face.vn;
-                
-				int j = 0;
-				while (j < 3)
-				{
-                    int i = 0;
-                    int attrib_counter = 0;
-                    int index = 0;
-                    while (*at != '\0')
-                    {
-                        if(*at == ' ' || *at == '\n' || *at == '\r')
-                        {
-                            if (*at == '\r') at ++;
-                            if (attrib_counter == 0)
-                            {
-                                *v++ = index;
-                                index = 0;
-                            }
-                            else if (attrib_counter == 1)
-                            {
-                                *vt++ = index;
-                                index = 0;
-                            }
-                            else if (attrib_counter == 2)
-                            {
-                                *vn++ = index;
-                                index = 0;
-                            }
-                            attrib_counter++;
-                            break;
-                        }
-                        if(*at == '/' )
-                        {
-                            if (attrib_counter == 0)
-                            {
-                                *v++ = index;
-
-                                index = 0;
-
-                            }
-                            else if (attrib_counter == 1)
-                            {
-                                *vt++ = index;
-                                index = 0;
-                            }
-                            attrib_counter++;
-                            at++;
-                            continue;
-                        }
-
-                        if (is_digit(*at))
-                        {
-                            index *= 10;
-                            index += (int)(*at - '0');
-                        }
-                        at++;
-                    }
-
-                    
-                    face.packed_data[j * 3 + i] = index;
-                    at++;
-					j++;
-				}
-				model.faces_count++;
-				model.faces[model.faces_count] = face;
-				//printf("f %d/%d/%d %d/%d/%d %d/%d/%d\n", face.packed_data[0],face.packed_data[1],face.packed_data[2],face.packed_data[3],face.packed_data[4],face.packed_data[5], face.packed_data[6], face.packed_data[7], face.packed_data[8]);
-				//printf("f %d/%d/%d %d/%d/%d %d/%d/%d\n", face.v[0],face.vt[0],face.vn[0],face.v[1],face.vt[1],face.vn[1], face.v[2], face.vt[2], face.vn[2]);
-			} break;
-			case '#':
-			{
-                char *start = at;
-                while(*at != '\n' && *at != '\0')
-                {
-                    at++;
-                }
-                //printf("%.*s\n", size, start);
-				at++;
-			} break;
-			default:
-			{
-				//printf("Unrecognized symbol %c\n", *at);
-				at++;
-			}
-		}
-    }
-    
-    LONGLONG end = timer_get_os_time();
-    LONGLONG result = end - start;
-    printf("parse_obj: %.2fms\n", timer_os_time_to_ms(result));
-    model.is_valid = 1;
-    return model;
-};
 
 f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
 {
@@ -619,68 +354,6 @@ void draw_triangle__scanline(Software_Render_Buffer *buffer, Vec2F32 A, Vec2F32 
     //framebuffer->set(C.x, C.y, green);
 }
 
-//Vec3 point_rotate_y(Vec3 p, f32 angle)
-Vec3 point_scalar(Vec3 p, f32 s)
-{
-    return (Vec3) {p.x * s, p.y * s, p.z * s};
-}
-Vec3 point_rotate_y(Vec3 p, f32 c, f32 s)
-{
-    Vec3 result = {0};
-    
-    //f32 c = cos(angle);
-    //f32 s = sin(angle);
-    
-    result.x = p.x * c + p.z * s;
-    result.y = p.y;
-    result.z = -p.x * s + p.z * c;
-    
-    //result.x = p.x;
-    //result.y = p.y * c - p.z * s;
-    //result.z = p.y * s + p.z * c;
-    
-    
-    return result;
-}
-
-Vec3 point_rotate_x(Vec3 p, f32 c, f32 s)
-{
-    Vec3 result = {0};
-    
-    //f32 c = cos(angle);
-    //f32 s = sin(angle);
-    
-    result.x = p.x;
-    result.z = p.z * c + p.x * s;
-    result.y = -p.z * s + p.y * c;
-    
-    //result.x = p.x;
-    //result.y = p.y * c - p.z * s;
-    //result.z = p.y * s + p.z * c;
-    
-    
-    return result;
-}
-
-Vec3 point_rotate_z(Vec3 p, f32 c, f32 s)
-{
-    Vec3 result = {0};
-    
-    //f32 c = cos(angle);
-    //f32 s = sin(angle);
-    
-    result.x = p.x * c + p.y * s;
-    result.y = -p.x * s + p.y * c;
-    result.z = p.z;
-    
-    //result.x = p.x;
-    //result.y = p.y * c - p.z * s;
-    //result.z = p.y * s + p.z * c;
-    
-    
-    return result;
-}
-
 global Obj_Model model_african_head;
 global Obj_Model model_teapot;
 global Obj_Model model_diablo;
@@ -821,6 +494,11 @@ static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
 }
 
+static inline b32 is_top_left_edge(float dx, float dy)
+{
+    return (dy > 0) || (dy == 0 && dx < 0);
+}
+
 static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
 {
 
@@ -836,6 +514,157 @@ static inline clear_screen(Software_Render_Buffer *buffer, u32 color)
     draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, color);
 }
 
+typedef struct Params Params;
+struct Params
+{
+    Mat4 view;
+    Mat4 persp;
+    Vec3 v0;
+    Vec3 v1;
+    Vec3 v2;
+    Vec3 v0_color;
+    Vec3 v1_color;
+    Vec3 v2_color;
+    f32 inv_w0;
+    f32 inv_w1;
+    f32 inv_w2;
+    f32 minx;
+    f32 maxx;
+    f32 miny;
+    f32 maxy;
+    Obj_Model *model;
+    Software_Render_Buffer *buffer;
+    Software_Depth_Buffer *depth_buffer;
+};
+
+internal void olivec_params(Params *params)
+{
+    Vec3 v0 = params->v0;
+    Vec3 v1 = params->v1;
+    Vec3 v2 = params->v2;
+    Vec3 v0_color = params->v0_color;
+    Vec3 v1_color = params->v1_color;
+    Vec3 v2_color = params->v2_color;
+    f32 inv_w0 = params->inv_w0;
+    f32 inv_w1 = params->inv_w1;
+    f32 inv_w2 = params->inv_w2;
+    f32 minx = params->minx;
+    f32 maxx = params->maxx;
+    f32 miny = params->miny;
+    f32 maxy = params->maxy;
+    for (u32 y = miny; y <= maxy; y++)
+    {
+        for (u32 x = minx; x <= maxx; x++)
+        {
+            int u1, u2, det;
+            if(olivec_barycentric(v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, x, y, &u1, &u2, &det))
+            {
+                f32 inv_det = 1.0f / (f32)det;
+                f32 b0 = (f32)u1*inv_det;
+                f32 b1 = (f32)u2*inv_det;
+                //f32 b2 = (det - u1 - u2)*inv_det;
+                f32 b2 =  1.0f - b0 - b1;
+                float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+
+                f32 depth = b0 * v0.z + b1 * v1.z + b2 * v2.z;
+                if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                {
+                    params->depth_buffer->data[y * params->buffer->width + x] = depth;
+
+                    Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                    Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                    u32 interpolated_color_to_u32 = 0;
+
+                    interpolated_color_to_u32 |= (0xFF << 24) |
+                        (((u32)final_color.x) & 0xFF) << 16 |
+                        (((u32)final_color.y) & 0xFF) << 8 |
+                        (((u32)final_color.z) & 0xFF) << 0;
+                    draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                }
+            }
+        }
+    }
+}
+
+internal void barycentric_with_edge_stepping(Params *params)
+{
+    Vec3 v0 = params->v0;
+    Vec3 v1 = params->v1;
+    Vec3 v2 = params->v2;
+    Vec3 v0_color = params->v0_color;
+    Vec3 v1_color = params->v1_color;
+    Vec3 v2_color = params->v2_color;
+    f32 inv_w0 = params->inv_w0;
+    f32 inv_w1 = params->inv_w1;
+    f32 inv_w2 = params->inv_w2;
+    f32 minx = params->minx;
+    f32 maxx = params->maxx;
+    f32 miny = params->miny;
+    f32 maxy = params->maxy;
+
+    Vec2F32 s0 = { v0.x, v0.y };
+    Vec2F32 s1 = { v1.x, v1.y };
+    Vec2F32 s2 = { v2.x, v2.y };
+    float area = edge(s0, s1, s2);          // signed
+    if (area == 0) return;                 // degenerate
+    if (area > 0) return;                 // degenerate
+    float inv_area = 1.0f / area;
+    // edge stepping basically
+    // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
+    float e0_dx = (s2.y - s1.y);  float e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
+    float e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
+    float e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
+
+    // Evaluate at top-left of bbox (pixel center)
+    float start_x = (float)minx + 0.5f;
+    float start_y = (float)miny + 0.5f;
+    Vec2F32 p0 = { start_x, start_y };
+    float row_w0 = edge(s1, s2, p0);
+    float row_w1 = edge(s2, s0, p0);
+    float row_w2 = edge(s0, s1, p0);
+
+    int lx, hx, ly, hy;
+    {
+        for (u32 y = miny; y < maxy; y++)
+        {
+            float w0 = row_w0;
+            float w1 = row_w1;
+            float w2 = row_w2;
+
+            for (u32 x = minx; x < maxx; x++)
+            {
+                if (!((w0 > 0 || w1 > 0 || w2 > 0)))
+                {
+                    float b0 = w0 * inv_area;
+                    float b1 = w1 * inv_area;
+                    float b2 = w2 * inv_area;
+                    float inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+
+                    }
+                    }
+                w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
+                }
+            row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step right
+            }
+        }
+    }
+
 UPDATE_AND_RENDER(update_and_render)
 {
     // remove this must come from the invoker
@@ -846,25 +675,25 @@ UPDATE_AND_RENDER(update_and_render)
         const char *filename = ".\\obj\\african_head\\african_head.obj";
         OS_FileReadResult obj = os_file_read(filename);
         model_african_head = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.faces_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.face_count / 3);
 
         filename = ".\\obj\\teapot.obj";
         obj = os_file_read(filename);
         model_teapot = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.faces_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count / 3);
 
         filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
         obj = os_file_read(filename);
         model_diablo = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.faces_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.face_count / 3);
 
         filename = ".\\obj\\f117.obj";
         obj = os_file_read(filename);
         model_f117 = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.faces_count / 3);
+        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.face_count / 3);
         
         {
-            entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.1, 3} };
+            entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.8, 3} };
             entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
             entities[entity_count++] = (Entity) { .name = "enemy_3", .model = &model_diablo, .position = (Vec3) {0.5, 0, 1} };
             entities[entity_count++] = (Entity) { .name = "enemy_4", .model = &model_african_head, .position = (Vec3) {-0.5, -0.2, 1} };
@@ -971,30 +800,33 @@ UPDATE_AND_RENDER(update_and_render)
 	f32 s = sin(angle);
 	f32 c_90 = cos(3.14 / 2.0f);
 	f32 s_90 = sin(3.14 / 2.0f);
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
     {
         BeginTime("rendering models", 1);
-        #if 0
+        #if 1
         {
-            for (u32 entity = 0; entity < entity_count; entity++)
-            //for (u32 entity = 0; entity < 1; entity++)
+            //for (u32 entity = 0; entity < entity_count; entity++)
+            for (u32 entity = 0; entity < 1; entity++)
             {
                 Entity* e = entities + entity;
                 Obj_Model *model = e->model;
                 if(model->is_valid)
                 {
-                    for(int face_index = 1; face_index <= model->faces_count; face_index++)
+                    for(int face_index = 1; face_index <= model->face_count; face_index++)
                     {
                         u32 color = blue;
                         Face face = model->faces[face_index];
-                        Vec3 v0 = model->points[face.v[0]];
-                        Vec3 v1 = model->points[face.v[1]];
-                        Vec3 v2 = model->points[face.v[2]];
+                        Vec3 v0 = model->vertices[face.v[0]];
+                        Vec3 v1 = model->vertices[face.v[1]];
+                        Vec3 v2 = model->vertices[face.v[2]];
 
                         if (model->has_normals)
                         {
-                            Vec3 n0 = model->points[face.vn[0]];
-                            Vec3 n1 = model->points[face.vn[1]];
-                            Vec3 n2 = model->points[face.vn[2]];
+                            Vec3 n0 = model->vertices[face.vn[0]];
+                            Vec3 n1 = model->vertices[face.vn[1]];
+                            Vec3 n2 = model->vertices[face.vn[2]];
                         }
 
 
@@ -1002,26 +834,26 @@ UPDATE_AND_RENDER(update_and_render)
                         if(model == &model_f117)
                         {
 
-                            v0 = point_rotate_z(v0, c_90, s_90);
-                            v1 = point_rotate_z(v1, c_90, s_90);
-                            v2 = point_rotate_z(v2, c_90, s_90);
+                            v0 = vec3_rotate_z(v0, c_90, s_90);
+                            v1 = vec3_rotate_z(v1, c_90, s_90);
+                            v2 = vec3_rotate_z(v2, c_90, s_90);
 
-                            v0 = point_rotate_y(v0, c, s);
-                            v1 = point_rotate_y(v1, c, s);
-                            v2 = point_rotate_y(v2, c, s);
+                            v0 = vec3_rotate_y(v0, c, s);
+                            v1 = vec3_rotate_y(v1, c, s);
+                            v2 = vec3_rotate_y(v2, c, s);
                         }
                         else
                         {
-                            v0 = point_rotate_y(v0, c, s);
-                            v1 = point_rotate_y(v1, c, s);
-                            v2 = point_rotate_y(v2, c, s);
+                            v0 = vec3_rotate_y(v0, c, s);
+                            v1 = vec3_rotate_y(v1, c, s);
+                            v2 = vec3_rotate_y(v2, c, s);
                         }
                         #endif
                         
                         // World space
-                        v0 = point_scalar(v0, 0.2f);
-                        v1 = point_scalar(v1, 0.2f);
-                        v2 = point_scalar(v2, 0.2f);
+                        v0 = vec3_scalar(v0, 0.5f);
+                        v1 = vec3_scalar(v1, 0.5f);
+                        v2 = vec3_scalar(v2, 0.5f);
                         
                         v0.x += e->position.x;
                         v0.y += e->position.y;
@@ -1030,11 +862,12 @@ UPDATE_AND_RENDER(update_and_render)
                         v1.x += e->position.x;
                         v1.y += e->position.y;
                         v1.z += e->position.z;
-                        
+
                         v2.x += e->position.x;
                         v2.y += e->position.y;
                         v2.z += e->position.z;
-
+                        
+                        
 
                         #if 0
                         {
@@ -1085,6 +918,9 @@ UPDATE_AND_RENDER(update_and_render)
                         {
                             //continue;
                         }
+                        f32 inv_w0;
+                        f32 inv_w1;
+                        f32 inv_w2;
                         
                         #if 1
                         {
@@ -1097,23 +933,26 @@ UPDATE_AND_RENDER(update_and_render)
                             //BeginTime("transformation", 0);
                             if(transformed_v0.w != 0)
                             {
-                                transformed_v0.x /= transformed_v0.w;
-                                transformed_v0.y /= transformed_v0.w;
-                                transformed_v0.z /= transformed_v0.w;
+                                inv_w0 = 1.0f / transformed_v0.w;
+                                transformed_v0.x *= inv_w0;
+                                transformed_v0.y *= inv_w0;
+                                transformed_v0.z *= inv_w0;
                             }
                             
                             if(transformed_v1.w != 0)
                             {
-                                transformed_v1.x /= transformed_v1.w;
-                                transformed_v1.y /= transformed_v1.w;
-                                transformed_v1.z /= transformed_v1.w;
+                                inv_w1 = 1.0f / transformed_v1.w;
+                                transformed_v1.x *= inv_w1;
+                                transformed_v1.y *= inv_w1;
+                                transformed_v1.z *= inv_w1;
                             }
                             
                             if(transformed_v2.w != 0)
                             {
-                                transformed_v2.x /= transformed_v2.w;
-                                transformed_v2.y /= transformed_v2.w;
-                                transformed_v2.z /= transformed_v2.w;
+                                inv_w2 = 1.0f / transformed_v2.w;
+                                transformed_v2.x *= inv_w2;
+                                transformed_v2.y *= inv_w2;
+                                transformed_v2.z *= inv_w2;
                             }
 
 
@@ -1151,45 +990,49 @@ UPDATE_AND_RENDER(update_and_render)
                         transformed_v2.x /= w_v2;
                         transformed_v2.y /= w_v2;
                         #endif
-                        //EndTime();
-                        
-                        f32 mapped_v0_x;
-                        f32 mapped_v0_y;
-                        f32 mapped_v1_x;
-                        f32 mapped_v1_y;
-                        f32 mapped_v2_x;
-                        f32 mapped_v2_y;
-                        
-                        //BeginTime("hello", 0);
                         {
-                            #if 1
-                            mapped_v0_x = (transformed_v0.x * 0.5f + 0.5f) * buffer->width;
-                            mapped_v0_y = (1.0f - (transformed_v0.y * 0.5f + 0.5f)) * buffer->height;
-                            mapped_v1_x = (transformed_v1.x * 0.5f + 0.5f) * buffer->width;
-                            mapped_v1_y = (1.0f - (transformed_v1.y * 0.5f + 0.5f)) * buffer->height;
-                            mapped_v2_x = (transformed_v2.x * 0.5f + 0.5f) * buffer->width;
-                            mapped_v2_y = (1.0f - (transformed_v2.y * 0.5f + 0.5f)) * buffer->height;
+                            v0.x = transformed_v0.x;
+                            v0.y = transformed_v0.y;
+                            v0.z = transformed_v0.z;
+
+                            v1.x = transformed_v1.x;
+                            v1.y = transformed_v1.y;
+                            v1.z = transformed_v1.z;
+
+                            v2.x = transformed_v2.x;
+                            v2.y = transformed_v2.y;
+                            v2.z = transformed_v2.z;
 
 
+                            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+                            v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+                            //v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
 
-                            #else
-                            mapped_v0_x = map_range(transformed_v0.x, -1.0f, 1.0f, 0.0f, buffer->width);
-                            mapped_v0_y = map_range(transformed_v0.y, -1.0f, 1.0f, buffer->height, 0.0f);
-                            mapped_v1_x = map_range(transformed_v1.x, -1.0f, 1.0f, 0.0f, buffer->width);
-                            mapped_v1_y = map_range(transformed_v1.y, -1.0f, 1.0f, buffer->height, 0.0f);
-                            mapped_v2_x = map_range(transformed_v2.x, -1.0f, 1.0f, 0.0f, buffer->width);
-                            mapped_v2_y = map_range(transformed_v2.y, -1.0f, 1.0f, buffer->height, 0.0f);
-                            #endif
-                        }
-                        //EndTime();
-                        //printf("First coord mapped %.4f -> %.4f\n", v0.x, mapped_v0_x);
-                        //BeginTime("dsa", 0);
-                        {
-                            Vec2F32 v0 = {mapped_v0_x, mapped_v0_y};
-                            Vec2F32 v1 = {mapped_v1_x, mapped_v1_y};
-                            Vec2F32 v2 = {mapped_v2_x, mapped_v2_y};
+                            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+                            v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+                            //v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+
+                            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+                            v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+                            //v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+
                             
-                            draw_triangle__scanline(buffer, v0, v1, v2, color);
+                            f32 minx = Min(Min(v0.x, v1.x), v2.x);
+                            f32 miny = Min(Min(v0.y, v1.y), v2.y);
+                            f32 maxx = Max(Max(v0.x, v1.x), v2.x);
+                            f32 maxy = Max(Max(v0.y, v1.y), v2.y);
+
+                            Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+                            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+                            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+
+                            /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+                            Params params = {view, persp, v0, v1, v2, new_vv0_color, new_vv1_color, new_vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
+                            params.buffer = buffer;
+                            params.depth_buffer = depth_buffer;
+                            barycentric_with_edge_stepping(&params);
+                            //olivec_params(&params);
+
                             //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
                             
                             //Triangle_Mesh triangle = {v0, v1, v2, blue};
@@ -1298,7 +1141,12 @@ UPDATE_AND_RENDER(update_and_render)
 			vv0_color = vec3_scalar(vv0_color, inv_w0);
 			vv1_color = vec3_scalar(vv1_color, inv_w1);
 			vv2_color = vec3_scalar(vv2_color, inv_w2);
+            Params params = {view, persp, v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
+            params.buffer = buffer;
+            params.depth_buffer = depth_buffer;
+            barycentric_with_edge_stepping(&params);
 
+            #if 0
             Vec3 plane_normal_of_triangle = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
             f32 area_of_parallelogram = vec3_magnitude(plane_normal_of_triangle);
             f32 area_of_triangle = area_of_parallelogram / 2.0f;
@@ -1423,6 +1271,7 @@ UPDATE_AND_RENDER(update_and_render)
                 #endif
                 }
             }
+            #endif
 
             #else
                 #if OLIVEC

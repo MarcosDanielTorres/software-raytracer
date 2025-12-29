@@ -3,15 +3,33 @@
 #include "base_math.h"
 #include "os_win32.h"
 #include "timer.h"
+#include "os_win32.c"
 #include "timer.c"
+#include "obj.h"
 #define EDGE_FUNCTIONS 0
 #define EDGE_STEPPING 0
 
 global Software_Render_Buffer *buffer;
 
+internal inline Vec3
+vec3_from_vec4(Vec4 a)
+{
+    Vec3 result = {a.x, a.y, a.z};
+    return result;
+}
+
+internal inline Vec4
+vec4_from_vec3(Vec3 a)
+{
+    Vec4 result = {a.x, a.y, a.z, 0.0};
+    return result;
+}
+
 typedef struct Params Params;
 struct Params
 {
+    Mat4 view;
+    Mat4 persp;
     Vec3 v0;
     Vec3 v1;
     Vec3 v2;
@@ -25,42 +43,17 @@ struct Params
     f32 maxx;
     f32 miny;
     f32 maxy;
+    Obj_Model *model;
 };
-typedef void (Test_Function)(Params *params);
-
-typedef struct Test_Function_Item Test_Function_Item;
-struct Test_Function_Item
-{
-    const char *function_name;
-    Test_Function *function; 
-};
-
-typedef struct Test_Function_Result Test_Function_Result;
-struct Test_Function_Result
-{
-    LONGLONG min;
-    LONGLONG max;
-    LONGLONG avg;
-    LONGLONG total;
-};
-
-typedef struct Tester Tester;
-struct Tester
-{
-    u32 function_count;
-    u32 iterations;
-    Test_Function_Result functions_results[100];
-};
-
 
 internal void create_and_apply_mvp(Params *params)
 {
-    Vec4 v0 = params->v0;
-    Vec4 *v1 = params->v1;
-    Vec4 *v2 = params->v2;
-    f32 *inv_w0 = params->inv_w0;
-    f32 *inv_w1 =  params->inv_w1;
-    f32 *inv_w2 = params->inv_w2;
+    Vec4 v0 = vec4_from_vec3(params->v0);
+    Vec4 v1 = vec4_from_vec3(params->v1);
+    Vec4 v2 = vec4_from_vec3(params->v2);
+    f32 *inv_w0 = &params->inv_w0;
+    f32 *inv_w1 =  &params->inv_w1;
+    f32 *inv_w2 = &params->inv_w2;
 
     Mat4 view = mat4_identity();
     f32 fov = 3.141592 / 3.0; // 60 deg
@@ -69,46 +62,50 @@ internal void create_and_apply_mvp(Params *params)
     f32 zfar = 50.0f;
     Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
 
-    *v0 = mat4_mul_vec4(view, *v0);
-    *v1 = mat4_mul_vec4(view, *v1);
-    *v2 = mat4_mul_vec4(view, *v2);
+    v0 = mat4_mul_vec4(view, v0);
+    v1 = mat4_mul_vec4(view, v1);
+    v2 = mat4_mul_vec4(view, v2);
 
-    *v0 = mat4_mul_vec4(persp, *v0);
-    *v1 = mat4_mul_vec4(persp, *v1);
-    *v2 = mat4_mul_vec4(persp, *v2);
+    v0 = mat4_mul_vec4(persp, v0);
+    v1 = mat4_mul_vec4(persp, v1);
+    v2 = mat4_mul_vec4(persp, v2);
 
-    *inv_w0 = 1.0f / v0->w;
-    *inv_w1 = 1.0f / v1->w;
-    *inv_w2 = 1.0f / v2->w;
-    if(v0->w != 0)
+    if(v0.w != 0)
     {
-        v0->x *= *inv_w0;
-        v0->y *= *inv_w0;
-        v0->z *= *inv_w0;
+        *inv_w0 = 1.0f / v0.w;
+        v0.x *= *inv_w0;
+        v0.y *= *inv_w0;
+        v0.z *= *inv_w0;
     }
     
-    if(v1->w != 0)
+    if(v1.w != 0)
     {
-        v1->x *= *inv_w1;
-        v1->y *= *inv_w1;
-        v1->z *= *inv_w1;
+        *inv_w1 = 1.0f / v1.w;
+        v1.x *= *inv_w1;
+        v1.y *= *inv_w1;
+        v1.z *= *inv_w1;
     }
     
-    if(v2->w != 0)
+    if(v2.w != 0)
     {
-        v2->x *= *inv_w2;
-        v2->y *= *inv_w2;
-        v2->z *= *inv_w2;
+        *inv_w2 = 1.0f / v2.w;
+        v2.x *= *inv_w2;
+        v2.y *= *inv_w2;
+        v2.z *= *inv_w2;
     }
 
-    v0->x = (v0->x * 0.5f + 0.5f) * buffer->width;
-    v0->y = (v0->y * 0.5f + 0.5f) * buffer->height;
+    v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+    v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
 
-    v1->x = (v1->x * 0.5f + 0.5f) * buffer->width;
-    v1->y = (v1->y * 0.5f + 0.5f) * buffer->height;
+    v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+    v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
 
-    v2->x = (v2->x * 0.5f + 0.5f) * buffer->width;
-    v2->y = (v2->y * 0.5f + 0.5f) * buffer->height;
+    v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+    v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
+
+    params->v0 = vec3_from_vec4(v0);
+    params->v1 = vec3_from_vec4(v1);
+    params->v2 = vec3_from_vec4(v2);
 }
 
 
@@ -396,10 +393,237 @@ internal void EndTime()
     free(node);
 }
 
+global Obj_Model model_teapot;
+
+internal void render(Params *params)
+{
+    Obj_Model *model = params->model;
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+    if(model->is_valid)
+    {
+        for(int face_index = 1; face_index <= model->face_count; face_index++)
+        {
+            u32 color = 0xFF00FF11;
+            Face face = model->faces[face_index];
+            Vec3 v0 = model->vertices[face.v[0]];
+            Vec3 v1 = model->vertices[face.v[1]];
+            Vec3 v2 = model->vertices[face.v[2]];
+
+            if (model->has_normals)
+            {
+                Vec3 n0 = model->vertices[face.vn[0]];
+                Vec3 n1 = model->vertices[face.vn[1]];
+                Vec3 n2 = model->vertices[face.vn[2]];
+            }
+
+
+            #if ROTATION
+            if(model == &model_f117)
+            {
+
+                v0 = vec3_rotate_z(v0, c_90, s_90);
+                v1 = vec3_rotate_z(v1, c_90, s_90);
+                v2 = vec3_rotate_z(v2, c_90, s_90);
+
+                v0 = vec3_rotate_y(v0, c, s);
+                v1 = vec3_rotate_y(v1, c, s);
+                v2 = vec3_rotate_y(v2, c, s);
+            }
+            else
+            {
+                v0 = vec3_rotate_y(v0, c, s);
+                v1 = vec3_rotate_y(v1, c, s);
+                v2 = vec3_rotate_y(v2, c, s);
+            }
+            #endif
+            
+            // World space
+            v0 = vec3_scalar(v0, 0.2f);
+            v1 = vec3_scalar(v1, 0.2f);
+            v2 = vec3_scalar(v2, 0.2f);
+            
+            #if 0
+            v0.x += e->position.x;
+            v0.y += e->position.y;
+            v0.z += e->position.z;
+            
+            v1.x += e->position.x;
+            v1.y += e->position.y;
+            v1.z += e->position.z;
+            
+            v2.x += e->position.x;
+            v2.y += e->position.y;
+            v2.z += e->position.z;
+            #endif
+
+
+            // view space
+            Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+            Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+            Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+            Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+            Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+            Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+            Vec3 N = vec3_cross(vec3_sub(transformed_v1_v3, transformed_v0_v3), vec3_sub(transformed_v2_v3, transformed_v0_v3));
+            //if(N.z >= 0 ) continue;
+            if(N.z >= 0 )
+            {
+                // cull
+                //color = blue;
+                continue;
+            }
+            else
+            {
+                //color = green;
+            }
+
+
+
+            #if 1
+            {
+                // remember that the projection matrix stores de viewspace z value in its w
+                // but the result vector is in clip space so z is in clip space, not in 
+                // viewspace, they are not the same zz
+                transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+                transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+                transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+                if(transformed_v0.w != 0)
+                {
+                    transformed_v0.x /= transformed_v0.w;
+                    transformed_v0.y /= transformed_v0.w;
+                    transformed_v0.z /= transformed_v0.w;
+                }
+                
+                if(transformed_v1.w != 0)
+                {
+                    transformed_v1.x /= transformed_v1.w;
+                    transformed_v1.y /= transformed_v1.w;
+                    transformed_v1.z /= transformed_v1.w;
+                }
+                
+                if(transformed_v2.w != 0)
+                {
+                    transformed_v2.x /= transformed_v2.w;
+                    transformed_v2.y /= transformed_v2.w;
+                    transformed_v2.z /= transformed_v2.w;
+                }
+
+
+            }
+            #else
+            f32 w_v0 = transformed_v0.z;
+            f32 w_v1 = transformed_v1.z;
+            f32 w_v2 = transformed_v2.z;
+
+            // g_over_aspect is used because g is the focal length, which is where
+            // the projection plane is: z = g
+            // and because the idea is to get this coordinates into the view volume
+            // it must go from [-aspect, aspect] to [-1, 1]
+            // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
+            // i divide it by aspect. So resulting form is: g_over_aspect * x
+            transformed_v0.x = g_over_aspect * transformed_v0.x;
+            transformed_v0.y = g * transformed_v0.y;
+            transformed_v0.z = -znear * k * transformed_v0.z;
+
+            transformed_v1.x = g_over_aspect * transformed_v1.x;
+            transformed_v1.y = g * transformed_v1.y;
+            transformed_v1.z = -znear * k * transformed_v1.z;
+
+            transformed_v2.x = g_over_aspect * transformed_v2.x;
+            transformed_v2.y = g * transformed_v2.y;
+            transformed_v2.z = -znear * k * transformed_v2.z;
+
+
+            transformed_v0.x /= w_v0;
+            transformed_v0.y /= w_v0;
+
+            transformed_v1.x /= w_v1;
+            transformed_v1.y /= w_v1;
+
+            transformed_v2.x /= w_v2;
+            transformed_v2.y /= w_v2;
+            #endif
+            
+            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+            v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
+
+            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+            v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
+
+            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+            v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
+
+            params->v0 = v0;
+            params->v1 = v1;
+            params->v2 = v2;
+            Params tmp = *params;
+            barycentric_with_edge_stepping(&tmp);
+        }
+    }
+}
+
+
+typedef void (Test_Function)(Params *params);
+
+typedef struct Test_Function_Item Test_Function_Item;
+struct Test_Function_Item
+{
+    const char *function_name;
+    Test_Function *function; 
+};
+
+#define MAX_SAMPLE 4096
+typedef struct Test_Function_Result Test_Function_Result;
+struct Test_Function_Result
+{
+    LONGLONG min;
+    LONGLONG max;
+    LONGLONG avg;
+    LONGLONG total;
+
+    LONGLONG samples[MAX_SAMPLE];
+    u32 sample_count;
+
+    LONGLONG p50;
+    LONGLONG p90;
+    LONGLONG p99;
+};
+
+
+typedef struct Tester Tester;
+struct Tester
+{
+    u32 function_count;
+    u32 iterations;
+
+    Test_Function_Result *functions_results;
+};
+
+int cmp_ll(const void *a, const void *b)
+{
+    LONGLONG x = *(const LONGLONG*)a;
+    LONGLONG y = *(const LONGLONG*)b;
+    return (x > y) - (x < y);
+}
+
+void compute_percentiles(Test_Function_Result *r)
+{
+    qsort(r->samples, r->sample_count, sizeof(LONGLONG), cmp_ll);
+
+    #define IDX(p) ((r->sample_count * (p)) / 100)
+
+    r->p50 = r->samples[IDX(50)];
+    r->p90 = r->samples[IDX(90)];
+    r->p99 = r->samples[IDX(99)];
+}
 int main()
 {
-
     timer_init();
+    const char *filename = ".\\obj\\teapot.obj";
+    OS_FileReadResult obj = os_file_read(filename);
+    model_teapot = parse_obj(obj.data, obj.size);
+    printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count / 3);
     time_context = VirtualAlloc(0, sizeof(TimeContext), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     i32 buffer_width = 640;
     i32 buffer_height = 480;
@@ -426,7 +650,6 @@ int main()
     f32 znear = 1.0f;
     f32 zfar = 50.0f;
     Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-
 
     // CCW o CW it doesnt even matter!
     Vec3 vv0_color = (Vec3) {255, 0, 0};
@@ -456,16 +679,18 @@ int main()
     {
         Params params = {0};
 
-        params.v0 = v0_v4;
-        params.v1 = v1_v4;
-        params.v2 = v2_v4;
+        params.view = view;
+        params.persp = persp;
+        params.v0 = vec3_from_vec4(v0_v4);
+        params.v1 = vec3_from_vec4(v1_v4);
+        params.v2 = vec3_from_vec4(v2_v4);
         params.inv_w0 = inv_w0;
         params.inv_w1 = inv_w1;
         params.inv_w2 = inv_w2;
         create_and_apply_mvp(&params);
-        v0_v4 = params.v0;
-        v1_v4 = params.v1;
-        v2_v4 = params.v2;
+        v0_v4 = vec4_from_vec3(params.v0);
+        v1_v4 = vec4_from_vec3(params.v1);
+        v2_v4 = vec4_from_vec3(params.v2);
         inv_w0 = params.inv_w0;
         inv_w1 = params.inv_w1;
         inv_w2 = params.inv_w2;
@@ -531,6 +756,7 @@ int main()
 
     Test_Function_Item function_table[] = 
     {
+        {"[SCALAR] render model using barycentric with edge stepping", render},
         {"[SCALAR] mvp creation and applying", create_and_apply_mvp},
         {"[SCALAR] barycentric with edge stepping", barycentric_with_edge_stepping},
         {"[SCALAR] barycentric_naive", barycentric_naive},
@@ -541,34 +767,44 @@ int main()
 
     int function_count  = ArrayCount(function_table);
     tester.function_count = function_count;
-    tester.iterations = 1000;
+    tester.functions_results = VirtualAlloc(0, tester.function_count * sizeof(Test_Function_Result), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    tester.iterations = 100;
     for(u32 i = 0; i < tester.function_count; i++)
     {
         tester.functions_results[i].max = 0;
         tester.functions_results[i].min = 999999999999;
     }
 
-    Params params = {v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
+    Params params = {view, persp, v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
+    params.model = &model_teapot;
     for(u32 function_index = 0; function_index < function_count; function_index++)
     {
         Test_Function_Item *function_metadata = function_table + function_index;
-        for (u32 i = 0; i <= tester.iterations; i++)
+        Test_Function_Result *result = tester.functions_results + function_index;
+        for (u32 i = 0; i < tester.iterations; i++)
         {
             LONGLONG start = timer_get_os_time();
-
-            function_metadata->function(&params);
+            Params tmp = params;
+            function_metadata->function(&tmp);
 
             LONGLONG end = timer_get_os_time();
             LONGLONG final_time = end - start;
 
-            tester.functions_results[function_index].min = Min(tester.functions_results[function_index].min, final_time);
-            tester.functions_results[function_index].max = Max(tester.functions_results[function_index].max, final_time);
-            tester.functions_results[function_index].total += final_time;
+            result->min = Min(tester.functions_results[function_index].min, final_time);
+            result->max = Max(tester.functions_results[function_index].max, final_time);
+            result->total += final_time;
+
+            result->samples[result->sample_count++] = final_time;
         }
+        compute_percentiles(result);
         printf("%s: \n", function_metadata->function_name);
-        printf("min: %.5fms\n",  timer_os_time_to_ms(tester.functions_results[function_index].min));
-        printf("max: %.5fms\n",  timer_os_time_to_ms(tester.functions_results[function_index].max));
-        printf("avg: %.5fms\n",  timer_os_time_to_ms(tester.functions_results[function_index].total / tester.iterations));
+        printf("min: %.5fms\n",  timer_os_time_to_ms(result->min));
+        printf("max: %.5fms\n",  timer_os_time_to_ms(result->max));
+        printf("avg: %.5fms\n",  timer_os_time_to_ms(result->total / tester.iterations));
+
+        printf("p50: %.5fms\n",  timer_os_time_to_ms(result->p50));
+        printf("p90: %.5fms\n",  timer_os_time_to_ms(result->p90));
+        printf("p99: %.5fms\n",  timer_os_time_to_ms(result->p99));
         //printf("total: %.5fms\n", timer_os_time_to_ms(tester.functions_results[function_index].total));
         printf("------------------------------------ \n\n");
     }
