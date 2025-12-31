@@ -226,7 +226,7 @@ int main ()
         total_time += dt;
         last_time = now;
         // ver sie lafrican head tarda 15 en debug tambien en tinyrenderr project
-        //printf("%.2fms\n", timer_os_time_to_ms(dt));
+        //printf("Game loop: %.2fms\n", timer_os_time_to_ms(dt));
         win32_process_pending_msgs();
 
         os_perform_hot_reload(&game_dll);

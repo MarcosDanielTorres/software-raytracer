@@ -9,7 +9,36 @@
 #define EDGE_FUNCTIONS 0
 #define EDGE_STEPPING 0
 
+// TODO inspect probably messing load_ps and load_ps1. 
+// TODO these values should be equal. See obj_to_simd
+//   model->vertices[0].x	5.94552631e-25	float
+//   model->vertices[0].y	6.376e-43#DEN	float
+//   model->vertices[0].z	6.00167743e-25	float
+//   model_simd->vertices.x[0]	5.94552631e-25	float
+//   model_simd->vertices.y[0]	5.94552631e-25	float
+//   model_simd->vertices.z[0]	5.94552631e-25	float
+
+
+#include <immintrin.h>
+
 global Software_Render_Buffer *buffer;
+
+
+typedef struct SIMD_Vec3 SIMD_Vec3;
+struct SIMD_Vec3
+{
+    f32 *x;
+    f32 *y;
+    f32 *z;
+};
+
+typedef struct Obj_Model_SIMD Obj_Model_SIMD;
+struct Obj_Model_SIMD
+{
+    SIMD_Vec3 vertices;
+};
+
+global Obj_Model_SIMD model_simd;
 
 internal inline Vec3
 vec3_from_vec4(Vec4 a)
@@ -44,6 +73,7 @@ struct Params
     f32 miny;
     f32 maxy;
     Obj_Model *model;
+    Obj_Model_SIMD *model_simd;
 };
 
 internal void create_and_apply_mvp(Params *params)
@@ -617,13 +647,430 @@ void compute_percentiles(Test_Function_Result *r)
     r->p90 = r->samples[IDX(90)];
     r->p99 = r->samples[IDX(99)];
 }
+
+global Vec3 *screen_space_vertices;
+global f32 *inv_w;
+global SIMD_Vec3 *screen_space_vertices_simd;
+global f32 *inv_w_simd;
+
+internal void stages_separated_simd(Params *params)
+{
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
+    Obj_Model *model = params->model;    
+    Obj_Model_SIMD *model_simd = params->model_simd;
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+
+    f32 fov = 3.141592 / 3.0; // 60 deg
+    f32 g = 1.0f / tan(fov * 0.5f);
+    f32 aspect = (f32)buffer->width / (f32)buffer->height;
+    f32 znear = 1.0f;
+    f32 zfar = 50.0f;
+    f32 k = zfar / (zfar - znear);
+    f32 g_over_aspect = g / aspect;
+    f32 minus_znear_times_k = -znear * k;
+
+    f32 one = 1.0f;
+    f32 half = 0.5f;
+
+    __m128 half_width = _mm_mul_ps(_mm_load_ps1(&(f32)buffer->width), _mm_load_ps1(&half));
+    __m128 half_height = _mm_mul_ps(_mm_load_ps1(&(f32)buffer->height), _mm_load_ps1(&half));
+    for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index+=4)
+    {
+        f32 x_prime = model_simd->vertices.x[vertex_index];
+        f32 y_prime = model_simd->vertices.y[vertex_index];
+        f32 z_prime = model_simd->vertices.z[vertex_index];
+        __m128 packed_x_prime = _mm_load_ps(&x_prime);
+        __m128 packed_y_prime = _mm_load_ps(&y_prime);
+        __m128 packed_z_prime = _mm_load_ps(&z_prime);
+        f32 s = 0.2f;
+        __m128 scalar = _mm_load_ps1(&s);
+
+        // World space
+        packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
+        packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
+        packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
+
+        // view space
+        // TODO
+
+        __m128 view_space_packed_z = packed_z_prime;
+        // perspective matrix
+        // after: in clip space
+        packed_x_prime = _mm_mul_ps(packed_x_prime, _mm_load_ps1(&g_over_aspect));
+        packed_y_prime = _mm_mul_ps(packed_y_prime, _mm_load_ps1(&g));
+        packed_z_prime = _mm_add_ps(_mm_mul_ps(packed_z_prime, _mm_load_ps1(&k)), _mm_load_ps1(&minus_znear_times_k));
+
+        // perspective divide
+        // after: in NDC space
+        // how do i handle division by zero without branching?
+        __m128 packed_inv_w = _mm_div_ps(view_space_packed_z, _mm_load_ps1(&one));
+        packed_x_prime = _mm_mul_ps(packed_x_prime, packed_inv_w);
+        packed_y_prime = _mm_mul_ps(packed_y_prime, packed_inv_w);
+        packed_z_prime = _mm_mul_ps(packed_z_prime, packed_inv_w);
+
+        // viewport space
+        // this: _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+        // should be equivalent to: v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+        // after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
+        // or: v.x = v.x * half_width + half_width
+        // same for v.y
+
+        packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+        packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_height), half_height);
+        
+        _mm_store_ps(screen_space_vertices_simd->x + vertex_index, packed_x_prime);
+        _mm_store_ps(screen_space_vertices_simd->y + vertex_index, packed_y_prime); 
+        _mm_store_ps(screen_space_vertices_simd->z + vertex_index, packed_z_prime); 
+        _mm_store_ps(inv_w_simd + vertex_index, packed_inv_w); 
+
+        #if 0
+        // view space
+        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v.x, .y = v.y, .z = v.z, .w = 1});
+        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+
+        f32 inv_w0;
+        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+        if(transformed_v0.w != 0)
+        {
+            inv_w0 = 1.0f / transformed_v0.w;
+            transformed_v0.x *= inv_w0;
+            transformed_v0.y *= inv_w0;
+            transformed_v0.z *= inv_w0;
+        }
+
+        v.x = transformed_v0.x;
+        v.y = transformed_v0.y;
+        v.z = transformed_v0.z;
+
+        v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+        #if FLIPPED_Y
+        v.y = (1.0f - (v.y * 0.5f + 0.5f)) * buffer->height;
+        #else
+        v.y = ((v.y * 0.5f + 0.5f)) * buffer->height;
+        #endif
+
+        
+        screen_space_vertices[vertex_index] = v;
+        inv_w[vertex_index] = inv_w0;
+        #endif
+    }
+
+
+    for(int face_index = 1; face_index <= model->face_count; face_index++)
+    {
+        {
+            Face face = model->faces[face_index];
+            Vec3 v0 = (Vec3) {screen_space_vertices_simd->x[face.v[0]], screen_space_vertices_simd->y[face.v[0]], screen_space_vertices_simd->z[face.v[0]]};
+            Vec3 v1 = (Vec3) {screen_space_vertices_simd->x[face.v[1]], screen_space_vertices_simd->y[face.v[1]], screen_space_vertices_simd->z[face.v[1]]};
+            Vec3 v2 = (Vec3) {screen_space_vertices_simd->x[face.v[2]], screen_space_vertices_simd->y[face.v[2]], screen_space_vertices_simd->z[face.v[2]]};
+
+            f32 inv_w0 = inv_w_simd[face.v[0]];
+            f32 inv_w1 = inv_w_simd[face.v[1]];
+            f32 inv_w2 = inv_w_simd[face.v[2]];
+
+            f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+            f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+            f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+            f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+            min_x = ClampBot(min_x, 0);
+            max_x = ClampTop(max_x, buffer->width);
+            min_y = ClampBot(min_y, 0);
+            max_y = ClampTop(max_y, buffer->height);
+
+            Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+
+            /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+            Params params = 
+            {
+                view, persp,
+                v0, v1, v2,
+                new_vv0_color, new_vv1_color, new_vv2_color,
+                inv_w0, inv_w1, inv_w2,
+                min_x, max_x, min_y, max_y
+            };
+
+            barycentric_with_edge_stepping(&params);
+        }
+    }
+}
+
+internal void stages_separated(Params *params)
+{
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
+    Obj_Model *model = params->model;    
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+
+
+    for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index++)
+    {
+        Vec3 v = model->vertices[vertex_index];
+        
+        // World space
+        v = vec3_scalar(v, 0.2f);
+        
+        // view space
+        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v.x, .y = v.y, .z = v.z, .w = 1});
+        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+
+        f32 inv_w0;
+        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+        //BeginTime("transformation", 0);
+        if(transformed_v0.w != 0)
+        {
+            inv_w0 = 1.0f / transformed_v0.w;
+            transformed_v0.x *= inv_w0;
+            transformed_v0.y *= inv_w0;
+            transformed_v0.z *= inv_w0;
+        }
+        
+
+        v.x = transformed_v0.x;
+        v.y = transformed_v0.y;
+        v.z = transformed_v0.z;
+
+
+        v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+        #if FLIPPED_Y
+        v.y = (1.0f - (v.y * 0.5f + 0.5f)) * buffer->height;
+        #else
+        v.y = ((v.y * 0.5f + 0.5f)) * buffer->height;
+        #endif
+
+        screen_space_vertices[vertex_index] = v;
+        inv_w[vertex_index] = inv_w0;
+    }
+
+
+    for(int face_index = 1; face_index <= model->face_count; face_index++)
+    {
+        {
+            Face face = model->faces[face_index];
+            Vec3 v0 = screen_space_vertices[face.v[0]];
+            Vec3 v1 = screen_space_vertices[face.v[1]];
+            Vec3 v2 = screen_space_vertices[face.v[2]];
+
+            f32 inv_w0 = inv_w[face.v[0]];
+            f32 inv_w1 = inv_w[face.v[1]];
+            f32 inv_w2 = inv_w[face.v[2]];
+
+            f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+            f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+            f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+            f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+            min_x = ClampBot(min_x, 0);
+            max_x = ClampTop(max_x, buffer->width);
+            min_y = ClampBot(min_y, 0);
+            max_y = ClampTop(max_y, buffer->height);
+
+            Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+
+            /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+            Params params = 
+            {
+                view, persp,
+                v0, v1, v2,
+                new_vv0_color, new_vv1_color, new_vv2_color,
+                inv_w0, inv_w1, inv_w2,
+                min_x, max_x, min_y, max_y
+            };
+
+            barycentric_with_edge_stepping(&params);
+        }
+    }
+}
+
+internal void stages_combined(Params *params)
+{
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
+    Obj_Model *model = params->model;    
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+
+    for(int face_index = 1; face_index <= model->face_count; face_index++)
+    {
+        {
+            Face face = model->faces[face_index];
+            Vec3 v0 = model->vertices[face.v[0]];
+            Vec3 v1 = model->vertices[face.v[1]];
+            Vec3 v2 = model->vertices[face.v[2]];
+
+            if (model->has_normals)
+            {
+                Vec3 n0 = model->vertices[face.vn[0]];
+                Vec3 n1 = model->vertices[face.vn[1]];
+                Vec3 n2 = model->vertices[face.vn[2]];
+            }
+
+
+            #if ROTATION
+            if(model == &model_f117)
+            {
+                v0 = vec3_rotate_z(v0, c_90, s_90);
+                v1 = vec3_rotate_z(v1, c_90, s_90);
+                v2 = vec3_rotate_z(v2, c_90, s_90);
+
+                v0 = vec3_rotate_y(v0, c, s);
+                v1 = vec3_rotate_y(v1, c, s);
+                v2 = vec3_rotate_y(v2, c, s);
+            }
+            else
+            {
+                v0 = vec3_rotate_y(v0, c, s);
+                v1 = vec3_rotate_y(v1, c, s);
+                v2 = vec3_rotate_y(v2, c, s);
+            }
+            #endif
+            
+            // World space
+            v0 = vec3_scalar(v0, 0.2f);
+            v1 = vec3_scalar(v1, 0.2f);
+            v2 = vec3_scalar(v2, 0.2f);
+            
+            
+            // view space
+            Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+            Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+            Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+            Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+            Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+            Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+
+            f32 inv_w0;
+            f32 inv_w1;
+            f32 inv_w2;
+            // remember that the projection matrix stores de viewspace z value in its w
+            // but the result vector is in clip space so z is in clip space, not in 
+            // viewspace, they are not the same zz
+            transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+            transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+            transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+            //BeginTime("transformation", 0);
+            if(transformed_v0.w != 0)
+            {
+                inv_w0 = 1.0f / transformed_v0.w;
+                transformed_v0.x *= inv_w0;
+                transformed_v0.y *= inv_w0;
+                transformed_v0.z *= inv_w0;
+            }
+            
+            if(transformed_v1.w != 0)
+            {
+                inv_w1 = 1.0f / transformed_v1.w;
+                transformed_v1.x *= inv_w1;
+                transformed_v1.y *= inv_w1;
+                transformed_v1.z *= inv_w1;
+            }
+            
+            if(transformed_v2.w != 0)
+            {
+                inv_w2 = 1.0f / transformed_v2.w;
+                transformed_v2.x *= inv_w2;
+                transformed_v2.y *= inv_w2;
+                transformed_v2.z *= inv_w2;
+            }
+
+            v0.x = transformed_v0.x;
+            v0.y = transformed_v0.y;
+            v0.z = transformed_v0.z;
+
+            v1.x = transformed_v1.x;
+            v1.y = transformed_v1.y;
+            v1.z = transformed_v1.z;
+
+            v2.x = transformed_v2.x;
+            v2.y = transformed_v2.y;
+            v2.z = transformed_v2.z;
+
+
+            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+            #if FLIPPED_Y
+            v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+            v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+            v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+            #else
+            v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+            v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+            v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+            #endif
+
+
+            f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+            f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+            f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+            f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+            min_x = ClampBot(min_x, 0);
+            max_x = ClampTop(max_x, buffer->width);
+            min_y = ClampBot(min_y, 0);
+            max_y = ClampTop(max_y, buffer->height);
+
+            Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+
+            /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+            Params params = 
+            {
+                view, persp,
+                v0, v1, v2,
+                new_vv0_color, new_vv1_color, new_vv2_color,
+                inv_w0, inv_w1, inv_w2,
+                min_x, max_x, min_y, max_y
+            };
+
+            barycentric_with_edge_stepping(&params);
+        }
+    }
+
+}
+
+internal Obj_Model_SIMD obj_to_simd(Obj_Model model)
+{
+    Obj_Model_SIMD result = {0};
+    u32 count = model.vertex_count;
+    if (model.vertex_count % 4 != 0)
+    {
+        count = (u32)roundf((f32)model.vertex_count / 4.0f) * 4.0f;
+        printf("Rounding %d to %d\n", model.vertex_count, count);
+    }
+
+    result.vertices.x = (f32*) malloc(sizeof(f32) * (count + 1));
+    result.vertices.y = (f32*) malloc(sizeof(f32) * (count + 1));
+    result.vertices.z = (f32*) malloc(sizeof(f32) * (count + 1));
+    for(u32 vertex_index = 1; vertex_index < model.vertex_count; vertex_index++)
+    {
+        Vec3 model_vertex = model.vertices[vertex_index];
+        result.vertices.x[vertex_index] = model_vertex.x;
+        result.vertices.y[vertex_index] = model_vertex.y;
+        result.vertices.z[vertex_index] = model_vertex.z;
+    }
+
+    return result;
+}
+
+
 int main()
 {
     timer_init();
     const char *filename = ".\\obj\\teapot.obj";
     OS_FileReadResult obj = os_file_read(filename);
     model_teapot = parse_obj(obj.data, obj.size);
-    printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count / 3);
+    Obj_Model_SIMD model_simd = obj_to_simd(model_teapot);
+
+    printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count );
     time_context = VirtualAlloc(0, sizeof(TimeContext), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     i32 buffer_width = 640;
     i32 buffer_height = 480;
@@ -756,11 +1203,17 @@ int main()
 
     Test_Function_Item function_table[] = 
     {
+
+        {"[SIMD] stage 1 and stage 2", stages_separated_simd},
+        {"stage 1 and stage 2", stages_separated},
+        {"stages combined", stages_combined},
+        #if 0
         {"[SCALAR] render model using barycentric with edge stepping", render},
         {"[SCALAR] mvp creation and applying", create_and_apply_mvp},
         {"[SCALAR] barycentric with edge stepping", barycentric_with_edge_stepping},
         {"[SCALAR] barycentric_naive", barycentric_naive},
         {"[SCALAR] olivec_version", olivec_version},
+        #endif
     };
 
     Tester tester = {0};
@@ -768,7 +1221,7 @@ int main()
     int function_count  = ArrayCount(function_table);
     tester.function_count = function_count;
     tester.functions_results = VirtualAlloc(0, tester.function_count * sizeof(Test_Function_Result), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    tester.iterations = 100;
+    tester.iterations = 1;
     for(u32 i = 0; i < tester.function_count; i++)
     {
         tester.functions_results[i].max = 0;
@@ -777,6 +1230,16 @@ int main()
 
     Params params = {view, persp, v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
     params.model = &model_teapot;
+    params.model_simd = &model_simd;
+
+    screen_space_vertices = (Vec3*)malloc(sizeof(Vec3) * (params.model->vertex_count + 1));
+    inv_w = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));
+    screen_space_vertices_simd = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
+    screen_space_vertices_simd->x = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));
+    screen_space_vertices_simd->y = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));
+    screen_space_vertices_simd->z = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));
+    inv_w_simd = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));
+
     for(u32 function_index = 0; function_index < function_count; function_index++)
     {
         Test_Function_Item *function_metadata = function_table + function_index;
@@ -808,6 +1271,9 @@ int main()
         //printf("total: %.5fms\n", timer_os_time_to_ms(tester.functions_results[function_index].total));
         printf("------------------------------------ \n\n");
     }
+    // try first on game if this makes a difference which will probably certainly almost will
+    free(screen_space_vertices);
+    free(inv_w);
 
 
     #if 0

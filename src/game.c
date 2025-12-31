@@ -1,13 +1,32 @@
+// TODO Fix timer.h being between os_win32.h and os_win32.c. Not ergonomic!
+//
+// TODO See if reversed infinite perspetive is implemented correctly. Not a big problem for now, this is just visual quality
+//
+// TODO Investigate why some parts of the models are rendered even when they are behind other objects!
+//      I think it could be because im not doing face culling altough i dont haven't build the intuition as to why this make sense.
+//      Why culling would even do this?
+//
+// TODO At the time, rendering 4 entities takes roughly 40ms in debug build. And 20% of the time is spent doing model world camera perspective ndc viewport
+//      calculations. And 80% is the actual rendering!
+//      I will try to use simd to cut this 20% as much as possible
+//      In realse builds it seems this is closer to a 10%, but still i want to have my debug builds optimized. It's not acceptable not to!
+// TODO Try optimizing in differnet ways lets fucking do simd fuuuuuuuck
+//
+
 #include "base_core.h"
 #include "base_os.h"
 #include "os_win32.h"
-// TODO this order aint nice, fix it
 #include "timer.h"
 #include "os_win32.c"
 #include "base_math.h"
 #include "timer.c"
 #include "obj.h"
 #include <assert.h>
+
+#define PROFILE 1
+#ifndef PROFILE
+    #define PROFILE 0  
+#endif
 
 #define REVERSE_DEPTH_VALUE 0
 #ifndef REVERSE_DEPTH_VALUE
@@ -20,7 +39,7 @@
 #endif
 #define FLIPPED_Y 1
 #define PREVIOUS_MISCONCEPTIONS 1
-#define ROTATION 1
+#define ROTATION 0
 
 #define EDGE_FUNCTIONS 0
 #define OLIVEC 1
@@ -32,7 +51,7 @@
 
 
 global u32 discarded;
-f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
+internal f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
 {
     f32 t = (val - src_range_x) / (src_range_y - src_range_x);
     f32 result = dst_range_x + t * (dst_range_y - dst_range_x);
@@ -384,6 +403,20 @@ global Entity entities[100];
 global u32 entity_count;
 global u32 id;
 
+#if PROFILE
+
+typedef struct TimeContext TimeContext;
+struct TimeContext
+{
+    TimeContext *next;
+    const char* name;
+    LONGLONG start;
+    u32 id;
+    b32 print_at_end_of_scope;
+};
+
+global TimeContext *time_context;
+
 typedef struct AnchorData AnchorData;
 struct AnchorData
 {
@@ -394,25 +427,13 @@ struct AnchorData
 
 global AnchorData anchors[150];
 
-typedef struct TimeContext TimeContext;
-struct TimeContext
-{
-    TimeContext *next;
-    const char* name;
-    LONGLONG start;
-    u32 id;
-    b32 print;
-};
-
-#if 1
-global TimeContext *time_context;
-internal void BeginTime(const char *name, b32 print)
+internal void BeginTime(const char *name, b32 print_at_end_of_scope)
 {
     TimeContext *node = (TimeContext*)malloc(sizeof(TimeContext));
     node->next = time_context;
     time_context = node;
-    node->print = print;
-    if(!print)
+    node->print_at_end_of_scope = print_at_end_of_scope;
+    if(!print_at_end_of_scope)
         node->id = __COUNTER__;
 
     node->name = name;
@@ -422,25 +443,31 @@ internal void BeginTime(const char *name, b32 print)
 internal void EndTime()
 {
     TimeContext *node = time_context;
-    time_context = node->next;
-
-    LONGLONG end = timer_get_os_time();
-    LONGLONG result = end - node->start;
-    if(node->print)
+    if (node)
     {
-      printf("[%s] %.2fms\n", node->name, timer_os_time_to_ms(result));
+		time_context = node->next;
+
+		LONGLONG end = timer_get_os_time();
+		LONGLONG result = end - node->start;
+		if(node->print_at_end_of_scope)
+		{
+		  printf("[%s] %.2fms\n", node->name, timer_os_time_to_ms(result));
+		}
+		else
+		{
+			anchors[node->id].name = node->name;
+			anchors[node->id].result += result;
+			anchors[node->id].count += 1;
+
+		}
+		free(node);
     }
     else
     {
-        anchors[node->id].name = node->name;
-        anchors[node->id].result += result;
-        anchors[node->id].count += 1;
-
+        printf("[ERROR] Wrong BeginTime/EndTime\n");
     }
-    free(node);
 }
 #else
-global TimeContext *time_context;
 internal void BeginTime(const char *name, b32 print)
 {
 }
@@ -534,10 +561,10 @@ struct Params
     f32 inv_w0;
     f32 inv_w1;
     f32 inv_w2;
-    f32 minx;
-    f32 maxx;
-    f32 miny;
-    f32 maxy;
+    f32 min_x;
+    f32 max_x;
+    f32 min_y;
+    f32 max_y;
     Obj_Model *model;
     Software_Render_Buffer *buffer;
     Software_Depth_Buffer *depth_buffer;
@@ -593,10 +620,10 @@ internal void olivec_params(Params *params)
     f32 inv_w0 = params->inv_w0;
     f32 inv_w1 = params->inv_w1;
     f32 inv_w2 = params->inv_w2;
-    f32 minx = params->minx;
-    f32 maxx = params->maxx;
-    f32 miny = params->miny;
-    f32 maxy = params->maxy;
+    f32 min_x = params->min_x;
+    f32 max_x = params->max_x;
+    f32 min_y = params->min_y;
+    f32 max_y = params->max_y;
     int lx, hx, ly, hy;
     if(olivec_normalize_triangle(params->buffer->width, params->buffer->height, v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, &lx, &hx, &ly, &hy))
     {
@@ -648,10 +675,10 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 inv_w0 = params->inv_w0;
     f32 inv_w1 = params->inv_w1;
     f32 inv_w2 = params->inv_w2;
-    f32 minx = params->minx;
-    f32 maxx = params->maxx;
-    f32 miny = params->miny;
-    f32 maxy = params->maxy;
+    f32 min_x = params->min_x;
+    f32 max_x = params->max_x;
+    f32 min_y = params->min_y;
+    f32 max_y = params->max_y;
 
     Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
@@ -669,7 +696,7 @@ internal void barycentric_with_edge_stepping(Params *params)
 
         area = -area;
     }
-        #endif
+    #endif
 
     f32 inv_area = 1.0f / area;
     // edge stepping basically
@@ -679,8 +706,8 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
 
     // Evaluate at top-left of bbox (pixel center)
-    f32 start_x = (float)minx + 0.5f;
-    f32 start_y = (float)miny + 0.5f;
+    f32 start_x = (float)min_x + 0.5f;
+    f32 start_y = (float)min_y + 0.5f;
     Vec2F32 p0 = { start_x, start_y };
     f32 row_w0 = edge(s1, s2, p0);
     f32 row_w1 = edge(s2, s0, p0);
@@ -693,13 +720,13 @@ internal void barycentric_with_edge_stepping(Params *params)
     const f32 eps = -1e-4f;
     int lx, hx, ly, hy;
     {
-        for (u32 y = miny; y < maxy; y++)
+        for (u32 y = min_y; y < max_y; y++)
         {
             f32 w0 = row_w0;
             f32 w1 = row_w1;
             f32 w2 = row_w2;
 
-            for (u32 x = minx; x < maxx; x++)
+            for (u32 x = min_x; x < max_x; x++)
             {
                 b32 inside =
                     (e0_inc ? w0 >= 0.f : w0 > eps) &&
@@ -778,14 +805,19 @@ UPDATE_AND_RENDER(update_and_render)
         
         {
             entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.8, 3} };
-            entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
+            // TODO face_index = 1 of this model references 117 vertex which is not right as 117 > vertex_count and this should be 
+            // the contents of the first face: f 1/1/1 62/2/1 61/3/1
+            //entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
             entities[entity_count++] = (Entity) { .name = "enemy_3", .model = &model_diablo, .position = (Vec3) {0.5, 0, 1} };
             entities[entity_count++] = (Entity) { .name = "enemy_4", .model = &model_african_head, .position = (Vec3) {-0.5, -0.2, 1} };
             // should in theory??? be contained between +- 2.303627
         }
         printf("Entity count: %d\n", entity_count);
 
+        #if PROFILE
         time_context = (TimeContext*)malloc(sizeof(TimeContext));
+        #endif
+
         #if PREVIOUS_MISCONCEPTIONS
             const char *msg = "Problem: Perspective Projection misunderstanding:\n I though that every coordinate, after applying the perspective projection will be inside the NDC space, which is not true, as only applies to points inside the view frustum.\n"
             "\"The x and y coordinates of any point inside the view frustum both fall into the range [-1, 1 ] in the canonical view volume, and the z coordinates between the near and far planes are mapped to the range [0, 1]. These are called normalized device coordinates, and they are later scaled to the dimensions of the frame buffer by the viewport transform.\" -Eric Lengyel"
@@ -845,7 +877,6 @@ UPDATE_AND_RENDER(update_and_render)
     printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
     printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
     printf("This shit doesnt even work. Also the depth values visualization is not clear!\n");
-    // TODO fix this shit i dont see the good depth values. just a retarded invertion 
     Mat4 persp = mat4_make_reverse_infinite_perspective(fov, aspect, znear, zfar);
     persp = mat4_make_perspective(fov, aspect, znear, zfar);
     //persp = mat4_make_reverse_perspective(fov, aspect, znear, zfar);
@@ -888,21 +919,109 @@ UPDATE_AND_RENDER(update_and_render)
     Vec3 vv1_color = (Vec3) {0, 255, 0};
     Vec3 vv2_color = (Vec3) {0, 0, 255};
     discarded = 0;
+    /*
+    f32 w_v0 = transformed_v0.z;
+    f32 w_v1 = transformed_v1.z;
+    f32 w_v2 = transformed_v2.z;
+
+    // g_over_aspect is used because g is the focal length, which is where
+    // the projection plane is: z = g
+    // and because the idea is to get this coordinates into the view volume
+    // it must go from [-aspect, aspect] to [-1, 1]
+    // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
+    // i divide it by aspect. So resulting form is: g_over_aspect * x
+    transformed_v0.x = g_over_aspect * transformed_v0.x;
+    transformed_v0.y = g * transformed_v0.y;
+    transformed_v0.z = -znear * k * transformed_v0.z;
+
+    transformed_v1.x = g_over_aspect * transformed_v1.x;
+    transformed_v1.y = g * transformed_v1.y;
+    transformed_v1.z = -znear * k * transformed_v1.z;
+
+    transformed_v2.x = g_over_aspect * transformed_v2.x;
+    transformed_v2.y = g * transformed_v2.y;
+    transformed_v2.z = -znear * k * transformed_v2.z;
+
+
+    transformed_v0.x /= w_v0;
+    transformed_v0.y /= w_v0;
+
+    transformed_v1.x /= w_v1;
+    transformed_v1.y /= w_v1;
+
+    transformed_v2.x /= w_v2;
+    transformed_v2.y /= w_v2;
+    */
+    BeginTime("processing models", 1);
+    #if 1
     {
-        BeginTime("rendering models", 1);
-        #if 1
+        for (u32 entity = 0; entity < entity_count; entity++)
+        //for (u32 entity = 0; entity < 1; entity++)
         {
-            for (u32 entity = 0; entity < entity_count; entity++)
-            //for (u32 entity = 0; entity < 1; entity++)
+            Entity* e = entities + entity;
+            Obj_Model *model = e->model;
+            if(model->is_valid)
             {
-                Entity* e = entities + entity;
-                Obj_Model *model = e->model;
-                if(model->is_valid)
+                Vec3 *screen_space_vertices = (Vec3*)malloc(sizeof(Vec3) * (model->vertex_count + 1));
+                f32 *inv_w = (f32*)malloc(sizeof(f32) * (model->vertex_count + 1));
+                for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index++)
                 {
-                    for(int face_index = 1; face_index <= model->face_count; face_index++)
+                    Vec3 v = model->vertices[vertex_index];
+                    
+                    // World space
+                    v = vec3_scalar(v, 0.2f);
+                    
+                    v.x += e->position.x;
+                    v.y += e->position.y;
+                    v.z += e->position.z;
+                    
+                    // view space
+                    Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v.x, .y = v.y, .z = v.z, .w = 1});
+                    Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+
+                    f32 inv_w0;
+                    transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+                    //BeginTime("transformation", 0);
+                    if(transformed_v0.w != 0)
                     {
-                        u32 color = blue;
+                        inv_w0 = 1.0f / transformed_v0.w;
+                        transformed_v0.x *= inv_w0;
+                        transformed_v0.y *= inv_w0;
+                        transformed_v0.z *= inv_w0;
+                    }
+                    
+
+                    v.x = transformed_v0.x;
+                    v.y = transformed_v0.y;
+                    v.z = transformed_v0.z;
+
+
+                    v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+                    #if FLIPPED_Y
+                    v.y = (1.0f - (v.y * 0.5f + 0.5f)) * buffer->height;
+                    #else
+                    v.y = ((v.y * 0.5f + 0.5f)) * buffer->height;
+                    #endif
+
+                    screen_space_vertices[vertex_index] = v;
+                    inv_w[vertex_index] = inv_w0;
+                }
+
+
+                for(int face_index = 1; face_index <= model->face_count; face_index++)
+                {
+                    BeginTime("rendering models", 0);
+                    {
                         Face face = model->faces[face_index];
+                        #if 1
+                        Vec3 v0 = screen_space_vertices[face.v[0]];
+                        Vec3 v1 = screen_space_vertices[face.v[1]];
+                        Vec3 v2 = screen_space_vertices[face.v[2]];
+
+                        f32 inv_w0 = inv_w[face.v[0]];
+                        f32 inv_w1 = inv_w[face.v[1]];
+                        f32 inv_w2 = inv_w[face.v[2]];
+                        #else
                         Vec3 v0 = model->vertices[face.v[0]];
                         Vec3 v1 = model->vertices[face.v[1]];
                         Vec3 v2 = model->vertices[face.v[2]];
@@ -918,7 +1037,6 @@ UPDATE_AND_RENDER(update_and_render)
                         #if ROTATION
                         if(model == &model_f117)
                         {
-
                             v0 = vec3_rotate_z(v0, c_90, s_90);
                             v1 = vec3_rotate_z(v1, c_90, s_90);
                             v2 = vec3_rotate_z(v2, c_90, s_90);
@@ -952,22 +1070,6 @@ UPDATE_AND_RENDER(update_and_render)
                         v2.y += e->position.y;
                         v2.z += e->position.z;
                         
-                        
-
-                        #if 0
-                        {
-                            Vec3 N = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
-                            Vec3 V = vec3_sub(camera_eye, v0);
-                            f32 dot_result = vec3_dot(N, V);
-                            // clip everything that has a normal pointing in the opposite direction to vertex to camera
-                            if(dot_result <= 0)
-                            {
-                                continue;
-                            }
-                        }
-                        #endif
-
-                        
                         // view space
                         Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
                         Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
@@ -975,40 +1077,185 @@ UPDATE_AND_RENDER(update_and_render)
                         Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
                         Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
                         Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
-                        Vec3 N = vec3_cross(vec3_sub(transformed_v1_v3, transformed_v0_v3), vec3_sub(transformed_v2_v3, transformed_v0_v3));
-                        //if(N.z >= 0 ) continue;
-                        if(N.z >= 0 )
-                        {
-                            // cull
-                            //color = blue;
-                            //continue;
-                        }
-                        else
-                        {
-                            //color = green;
-                        }
 
-
-
-                        // why is this not working?
-                        if(transformed_v0.z <= znear)
-                        {
-                            //continue;
-                        }
-                        if(transformed_v1.z <= znear)
-                        {
-                            //continue;
-                        }
-                        if(transformed_v2.z <= znear)
-                        {
-                            //continue;
-                        }
                         f32 inv_w0;
                         f32 inv_w1;
                         f32 inv_w2;
-                        
-                        #if 1
+                        // remember that the projection matrix stores de viewspace z value in its w
+                        // but the result vector is in clip space so z is in clip space, not in 
+                        // viewspace, they are not the same zz
+                        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+                        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+                        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+                        //BeginTime("transformation", 0);
+                        if(transformed_v0.w != 0)
                         {
+                            inv_w0 = 1.0f / transformed_v0.w;
+                            transformed_v0.x *= inv_w0;
+                            transformed_v0.y *= inv_w0;
+                            transformed_v0.z *= inv_w0;
+                        }
+                        
+                        if(transformed_v1.w != 0)
+                        {
+                            inv_w1 = 1.0f / transformed_v1.w;
+                            transformed_v1.x *= inv_w1;
+                            transformed_v1.y *= inv_w1;
+                            transformed_v1.z *= inv_w1;
+                        }
+                        
+                        if(transformed_v2.w != 0)
+                        {
+                            inv_w2 = 1.0f / transformed_v2.w;
+                            transformed_v2.x *= inv_w2;
+                            transformed_v2.y *= inv_w2;
+                            transformed_v2.z *= inv_w2;
+                        }
+
+                        v0.x = transformed_v0.x;
+                        v0.y = transformed_v0.y;
+                        v0.z = transformed_v0.z;
+
+                        v1.x = transformed_v1.x;
+                        v1.y = transformed_v1.y;
+                        v1.z = transformed_v1.z;
+
+                        v2.x = transformed_v2.x;
+                        v2.y = transformed_v2.y;
+                        v2.z = transformed_v2.z;
+
+
+                        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+                        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+                        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+                        #if FLIPPED_Y
+                        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+                        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+                        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+                        #else
+                        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+                        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+                        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+                        #endif
+                        #endif
+
+
+                        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+                        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+                        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+                        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+                        min_x = ClampBot(min_x, 0);
+                        max_x = ClampTop(max_x, buffer->width);
+                        min_y = ClampBot(min_y, 0);
+                        max_y = ClampTop(max_y, buffer->height);
+
+                        Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+                        Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+                        Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+                        EndTime();
+
+                        /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+                        Params params = 
+                        {
+                            view, persp,
+                            v0, v1, v2,
+                            new_vv0_color, new_vv1_color, new_vv2_color,
+                            inv_w0, inv_w1, inv_w2,
+                            min_x, max_x, min_y, max_y
+                        };
+
+                        params.buffer = buffer;
+                        params.depth_buffer = depth_buffer;
+                        barycentric_with_edge_stepping(&params);
+                        //olivec_params(&params);
+                        //naive()
+                    }
+                }
+                free(screen_space_vertices);
+                free(inv_w);
+            }
+        }
+    }
+    #else
+    {
+        #if 1
+        {
+            for (u32 entity = 0; entity < entity_count; entity++)
+            //for (u32 entity = 0; entity < 1; entity++)
+            {
+                Entity* e = entities + entity;
+                Obj_Model *model = e->model;
+                if(model->is_valid)
+                {
+                    for(int face_index = 1; face_index <= model->face_count; face_index++)
+                    {
+                        BeginTime("rendering models", 0);
+                        {
+                            u32 color = blue;
+                            Face face = model->faces[face_index];
+                            Vec3 v0 = model->vertices[face.v[0]];
+                            Vec3 v1 = model->vertices[face.v[1]];
+                            Vec3 v2 = model->vertices[face.v[2]];
+
+                            if (model->has_normals)
+                            {
+                                Vec3 n0 = model->vertices[face.vn[0]];
+                                Vec3 n1 = model->vertices[face.vn[1]];
+                                Vec3 n2 = model->vertices[face.vn[2]];
+                            }
+
+
+                            #if ROTATION
+                            if(model == &model_f117)
+                            {
+
+                                v0 = vec3_rotate_z(v0, c_90, s_90);
+                                v1 = vec3_rotate_z(v1, c_90, s_90);
+                                v2 = vec3_rotate_z(v2, c_90, s_90);
+
+                                v0 = vec3_rotate_y(v0, c, s);
+                                v1 = vec3_rotate_y(v1, c, s);
+                                v2 = vec3_rotate_y(v2, c, s);
+                            }
+                            else
+                            {
+                                v0 = vec3_rotate_y(v0, c, s);
+                                v1 = vec3_rotate_y(v1, c, s);
+                                v2 = vec3_rotate_y(v2, c, s);
+                            }
+                            #endif
+                            
+                            // World space
+                            v0 = vec3_scalar(v0, 0.2f);
+                            v1 = vec3_scalar(v1, 0.2f);
+                            v2 = vec3_scalar(v2, 0.2f);
+                            
+                            v0.x += e->position.x;
+                            v0.y += e->position.y;
+                            v0.z += e->position.z;
+                            
+                            v1.x += e->position.x;
+                            v1.y += e->position.y;
+                            v1.z += e->position.z;
+
+                            v2.x += e->position.x;
+                            v2.y += e->position.y;
+                            v2.z += e->position.z;
+                            
+
+
+                            
+                            // view space
+                            Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+                            Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+                            Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+                            Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+                            Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+                            Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+
+                            f32 inv_w0;
+                            f32 inv_w1;
+                            f32 inv_w2;
                             // remember that the projection matrix stores de viewspace z value in its w
                             // but the result vector is in clip space so z is in clip space, not in 
                             // viewspace, they are not the same zz
@@ -1040,42 +1287,6 @@ UPDATE_AND_RENDER(update_and_render)
                                 transformed_v2.z *= inv_w2;
                             }
 
-
-                        }
-                        #else
-                        f32 w_v0 = transformed_v0.z;
-                        f32 w_v1 = transformed_v1.z;
-                        f32 w_v2 = transformed_v2.z;
-
-                        // g_over_aspect is used because g is the focal length, which is where
-                        // the projection plane is: z = g
-                        // and because the idea is to get this coordinates into the view volume
-                        // it must go from [-aspect, aspect] to [-1, 1]
-                        // x_proj / g = x / z => x_proj = g/z * x this gives [-aspect to -aspect] so then
-                        // i divide it by aspect. So resulting form is: g_over_aspect * x
-                        transformed_v0.x = g_over_aspect * transformed_v0.x;
-                        transformed_v0.y = g * transformed_v0.y;
-                        transformed_v0.z = -znear * k * transformed_v0.z;
-
-                        transformed_v1.x = g_over_aspect * transformed_v1.x;
-                        transformed_v1.y = g * transformed_v1.y;
-                        transformed_v1.z = -znear * k * transformed_v1.z;
-
-                        transformed_v2.x = g_over_aspect * transformed_v2.x;
-                        transformed_v2.y = g * transformed_v2.y;
-                        transformed_v2.z = -znear * k * transformed_v2.z;
-
-
-                        transformed_v0.x /= w_v0;
-                        transformed_v0.y /= w_v0;
-
-                        transformed_v1.x /= w_v1;
-                        transformed_v1.y /= w_v1;
-
-                        transformed_v2.x /= w_v2;
-                        transformed_v2.y /= w_v2;
-                        #endif
-                        {
                             v0.x = transformed_v0.x;
                             v0.y = transformed_v0.y;
                             v0.z = transformed_v0.z;
@@ -1102,30 +1313,36 @@ UPDATE_AND_RENDER(update_and_render)
                             v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
                             #endif
 
-                            
-                            f32 minx = Min(Min(v0.x, v1.x), v2.x);
-                            f32 miny = Min(Min(v0.y, v1.y), v2.y);
-                            f32 maxx = Max(Max(v0.x, v1.x), v2.x);
-                            f32 maxy = Max(Max(v0.y, v1.y), v2.y);
+                            f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+                            f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+                            f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+                            f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+                            min_x = ClampBot(min_x, 0);
+                            max_x = ClampTop(max_x, buffer->width);
+                            min_y = ClampBot(min_y, 0);
+                            max_y = ClampTop(max_y, buffer->height);
 
                             Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
                             Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
                             Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+                            EndTime();
 
                             /////draw_triangle__scanline(buffer, v0, v1, v2, color);
-                            Params params = {view, persp, v0, v1, v2, new_vv0_color, new_vv1_color, new_vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
+                            Params params = 
+                            {
+                                view, persp,
+                                v0, v1, v2,
+                                new_vv0_color, new_vv1_color, new_vv2_color,
+                                inv_w0, inv_w1, inv_w2,
+                                min_x, max_x, min_y, max_y
+                            };
+
                             params.buffer = buffer;
                             params.depth_buffer = depth_buffer;
                             barycentric_with_edge_stepping(&params);
                             //olivec_params(&params);
                             //naive()
-
-                            //draw_triangle(&framebuffer, v0, v1, v2, curr_color, TriangleRasterizationAlgorithm_Barycentric);
-                            
-                            //Triangle_Mesh triangle = {v0, v1, v2, blue};
-                            //prepare_scene_for_this_frame(&triangle, width, height);
                         }
-                        //EndTime();
                     }
                 }
             }
@@ -1438,17 +1655,19 @@ UPDATE_AND_RENDER(update_and_render)
                 #endif
             #endif
         #endif
-            
-        EndTime();
     }
+    #endif
+    EndTime();
+#if PROFILE
     for (u32 i = 0; i < 20; i++)
     {
         if (anchors[i].result == 0) continue;
-        printf("[%s] hit per frame: %d, time_total: %.5fms  time_average: %.5fms\n", anchors[i].name, anchors[i].count, timer_os_time_to_ms(anchors[i].result), timer_os_time_to_ms(anchors[i].result) / anchors[i].count);
+        printf("[%s] hit per frame: %d, time total per frame: %.5fms  time avg per frame: %.5fms\n", anchors[i].name, anchors[i].count, timer_os_time_to_ms(anchors[i].result), timer_os_time_to_ms(anchors[i].result) / anchors[i].count);
         anchors[i].result = 0;
         anchors[i].count = 0;
     }
     printf("Discarded trigs: %d of %d total trigs\n", discarded, model_teapot.face_count);
+#endif
     //LONGLONG model_end = timer_get_os_time();
     //LONGLONG result = model_end - model_now;
     
