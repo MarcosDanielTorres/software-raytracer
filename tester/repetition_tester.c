@@ -6,6 +6,7 @@
 #include "os_win32.c"
 #include "timer.c"
 #include "obj.h"
+#include <assert.h>
 #define EDGE_FUNCTIONS 0
 #define EDGE_STEPPING 0
 
@@ -648,10 +649,139 @@ void compute_percentiles(Test_Function_Result *r)
     r->p99 = r->samples[IDX(99)];
 }
 
+typedef struct SIMD_Result SIMD_Result;
+struct SIMD_Result
+{
+    SIMD_Vec3 *screen_space_vertices;
+    f32 *inv_w;
+};
+
+typedef struct Scalar_Result Scalar_Result;
+struct Scalar_Result
+{
+    Vec3 *screen_space_vertices;
+    f32 *inv_w;
+};
+
+internal SIMD_Result stages_separated_simd_output(Params *params)
+{
+    SIMD_Result result = {0};
+    result.screen_space_vertices = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
+    result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (params->model->vertex_count + 1));
+    result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (params->model->vertex_count + 1));
+    result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (params->model->vertex_count + 1));
+    result.inv_w = (f32*)malloc(sizeof(f32) * (params->model->vertex_count + 1));
+
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
+    Obj_Model *model = params->model;    
+    Obj_Model_SIMD *model_simd = params->model_simd;
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+
+    f32 fov = 3.141592 / 3.0; // 60 deg
+    f32 g = 1.0f / tan(fov * 0.5f);
+    f32 aspect = (f32)buffer->width / (f32)buffer->height;
+    f32 znear = 1.0f;
+    f32 zfar = 50.0f;
+    f32 k = zfar / (zfar - znear);
+    f32 g_over_aspect = g / aspect;
+    f32 minus_znear_times_k = -znear * k;
+
+    f32 one = 1.0f;
+    f32 half = 0.5f;
+
+    __m128 half_width = _mm_mul_ps(_mm_load_ps1(&(f32)buffer->width), _mm_load_ps1(&half));
+    __m128 half_height = _mm_mul_ps(_mm_load_ps1(&(f32)buffer->height), _mm_load_ps1(&half));
+    for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index+=4)
+    {
+        f32 *x_prime = &model_simd->vertices.x[vertex_index];
+        f32 *y_prime = &model_simd->vertices.y[vertex_index];
+        f32 *z_prime = &model_simd->vertices.z[vertex_index];
+        assert(model_simd->vertices.x[vertex_index] == model->vertices[vertex_index].x);
+        assert(model_simd->vertices.y[vertex_index] == model->vertices[vertex_index].y);
+        assert(model_simd->vertices.z[vertex_index] == model->vertices[vertex_index].z);
+        __m128 packed_x_prime = _mm_load_ps(x_prime);
+        __m128 packed_y_prime = _mm_load_ps(y_prime);
+        __m128 packed_z_prime = _mm_load_ps(z_prime);
+        f32 s = 0.2f;
+        __m128 scalar = _mm_load_ps1(&s);
+
+        // World space
+        packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
+        packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
+        packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
+
+        // view space
+        // TODO
+
+        __m128 view_space_packed_z = packed_z_prime;
+        // perspective matrix
+        // after: in clip space
+        packed_x_prime = _mm_mul_ps(packed_x_prime, _mm_load_ps1(&g_over_aspect));
+        packed_y_prime = _mm_mul_ps(packed_y_prime, _mm_load_ps1(&g));
+        packed_z_prime = _mm_add_ps(_mm_mul_ps(packed_z_prime, _mm_load_ps1(&k)), _mm_load_ps1(&minus_znear_times_k));
+
+        // perspective divide
+        // after: in NDC space
+        // how do i handle division by zero without branching?
+        __m128 packed_inv_w = _mm_div_ps(view_space_packed_z, _mm_load_ps1(&one));
+        packed_x_prime = _mm_mul_ps(packed_x_prime, packed_inv_w);
+        packed_y_prime = _mm_mul_ps(packed_y_prime, packed_inv_w);
+        packed_z_prime = _mm_mul_ps(packed_z_prime, packed_inv_w);
+
+        // viewport space
+        // this: _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+        // should be equivalent to: v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+        // after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
+        // or: v.x = v.x * half_width + half_width
+        // same for v.y
+
+        packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+        packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_height), half_height);
+        
+        _mm_store_ps(result.screen_space_vertices->x + vertex_index, packed_x_prime);
+        _mm_store_ps(result.screen_space_vertices->y + vertex_index, packed_y_prime); 
+        _mm_store_ps(result.screen_space_vertices->z + vertex_index, packed_z_prime); 
+        _mm_store_ps(result.inv_w + vertex_index, packed_inv_w); 
+    }
+
+    return result;
+}
+
 global Vec3 *screen_space_vertices;
 global f32 *inv_w;
 global SIMD_Vec3 *screen_space_vertices_simd;
 global f32 *inv_w_simd;
+
+internal b32 compare_results(SIMD_Result *simd_result, Scalar_Result *scalar_result, u32 vertex_count)
+{
+    b32 result = 1;
+    u32 mismatch_count = 0;
+    for(u32 vertex_index = 1; vertex_index <= vertex_count; vertex_index++)
+    {
+        f32 simd_x = simd_result->screen_space_vertices->x[vertex_index];
+        f32 scalar_x = scalar_result->screen_space_vertices[vertex_index].x;
+        f32 simd_y = simd_result->screen_space_vertices->y[vertex_index];
+        f32 scalar_y = scalar_result->screen_space_vertices[vertex_index].y;
+        f32 simd_z = simd_result->screen_space_vertices->z[vertex_index];
+        f32 scalar_z = scalar_result->screen_space_vertices[vertex_index].z;
+        if(!equal_f32(simd_x, scalar_x) ||
+           !equal_f32(simd_y, scalar_y) ||
+           !equal_f32(simd_z, scalar_z) ) 
+        {
+            printf("Vertex %u mismatch:\n", vertex_index);
+            printf("  SIMD   = (%g, %g, %g)\n", simd_x, simd_y, simd_z);
+            printf("  Scalar = (%g, %g, %g)\n", scalar_x, scalar_y, scalar_z);
+            mismatch_count++;
+            result = 0;
+        }
+
+    }
+    printf("%d mismatches out of %d vertices \n", mismatch_count, vertex_count);
+    return result;
+};
 
 internal void stages_separated_simd(Params *params)
 {
@@ -679,12 +809,15 @@ internal void stages_separated_simd(Params *params)
     __m128 half_height = _mm_mul_ps(_mm_load_ps1(&(f32)buffer->height), _mm_load_ps1(&half));
     for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index+=4)
     {
-        f32 x_prime = model_simd->vertices.x[vertex_index];
-        f32 y_prime = model_simd->vertices.y[vertex_index];
-        f32 z_prime = model_simd->vertices.z[vertex_index];
-        __m128 packed_x_prime = _mm_load_ps(&x_prime);
-        __m128 packed_y_prime = _mm_load_ps(&y_prime);
-        __m128 packed_z_prime = _mm_load_ps(&z_prime);
+        f32 *x_prime = &model_simd->vertices.x[vertex_index];
+        f32 *y_prime = &model_simd->vertices.y[vertex_index];
+        f32 *z_prime = &model_simd->vertices.z[vertex_index];
+        assert(model_simd->vertices.x[vertex_index] == model->vertices[vertex_index].x);
+        assert(model_simd->vertices.y[vertex_index] == model->vertices[vertex_index].y);
+        assert(model_simd->vertices.z[vertex_index] == model->vertices[vertex_index].z);
+        __m128 packed_x_prime = _mm_load_ps(x_prime);
+        __m128 packed_y_prime = _mm_load_ps(y_prime);
+        __m128 packed_z_prime = _mm_load_ps(z_prime);
         f32 s = 0.2f;
         __m128 scalar = _mm_load_ps1(&s);
 
@@ -797,6 +930,59 @@ internal void stages_separated_simd(Params *params)
             barycentric_with_edge_stepping(&params);
         }
     }
+}
+
+internal Scalar_Result stages_separated_scalar_output(Params *params)
+{
+    Scalar_Result result = {0};
+    result.screen_space_vertices = (Vec3*)malloc(sizeof(Vec3) * (params->model->vertex_count + 1));
+    result.inv_w = (f32*)malloc(sizeof(f32) * (params->model->vertex_count + 1));
+
+    Vec3 vv0_color = (Vec3) {255, 0, 0};
+    Vec3 vv1_color = (Vec3) {0, 255, 0};
+    Vec3 vv2_color = (Vec3) {0, 0, 255};
+    Obj_Model *model = params->model;    
+    Mat4 view = params->view;
+    Mat4 persp = params->persp;
+
+
+    for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index++)
+    {
+        Vec3 v = model->vertices[vertex_index];
+        
+        // World space
+        v = vec3_scalar(v, 0.2f);
+        
+        // view space
+        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v.x, .y = v.y, .z = v.z, .w = 1});
+        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+
+        f32 inv_w0;
+        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+        //BeginTime("transformation", 0);
+        if(transformed_v0.w != 0)
+        {
+            inv_w0 = 1.0f / transformed_v0.w;
+            transformed_v0.x *= inv_w0;
+            transformed_v0.y *= inv_w0;
+            transformed_v0.z *= inv_w0;
+        }
+        
+
+        v.x = transformed_v0.x;
+        v.y = transformed_v0.y;
+        v.z = transformed_v0.z;
+
+
+        v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+        v.y = ((v.y * 0.5f + 0.5f)) * buffer->height;
+
+        result.screen_space_vertices[vertex_index] = v;
+        result.inv_w[vertex_index] = inv_w0;
+    }
+
+
+    return result;
 }
 
 internal void stages_separated(Params *params)
@@ -1201,6 +1387,8 @@ int main()
     vv1_color = vec3_scalar(vv1_color, inv_w1);
     vv2_color = vec3_scalar(vv2_color, inv_w2);
 
+
+
     Test_Function_Item function_table[] = 
     {
 
@@ -1231,6 +1419,13 @@ int main()
     Params params = {view, persp, v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
     params.model = &model_teapot;
     params.model_simd = &model_simd;
+    SIMD_Result simd_result = stages_separated_simd_output(&params);
+    Scalar_Result scalar_result = stages_separated_scalar_output(&params);
+    if(!compare_results(&simd_result, &scalar_result, params.model->vertex_count))
+    {
+        printf("Math is not right!\n");
+        return -1;
+    }
 
     screen_space_vertices = (Vec3*)malloc(sizeof(Vec3) * (params.model->vertex_count + 1));
     inv_w = (f32*)malloc(sizeof(f32) * (params.model->vertex_count + 1));

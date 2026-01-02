@@ -1,5 +1,13 @@
 #pragma once
 #define EPSILON 1e-5f
+
+internal inline b32 equal_f32(f32 a, f32 b)
+{
+    f32 e = 1e-6f;
+    f32 diff = fabsf(a - b);
+    return diff <= e;
+};
+
 typedef struct Vec4 Vec4;
 struct Vec4
 {
