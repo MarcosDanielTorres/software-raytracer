@@ -22,6 +22,7 @@
 #include "timer.c"
 #include "obj.h"
 #include <assert.h>
+#include <immintrin.h>
 
 #define PROFILE 1
 #ifndef PROFILE
@@ -37,7 +38,7 @@
 #ifndef SHOW_DEPTH_BUFFER
     #define SHOW_DEPTH_BUFFER 0  
 #endif
-#define FLIPPED_Y 1
+#define FLIPPED_Y 0
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 0
 
@@ -108,6 +109,29 @@ internal inline void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u3
     memcpy((void*)ptr, &color, 4);
 #endif
 }
+
+typedef struct SIMD_Vec3 SIMD_Vec3;
+struct SIMD_Vec3
+{
+    f32 *x;
+    f32 *y;
+    f32 *z;
+};
+
+typedef struct SIMD_Result SIMD_Result;
+struct SIMD_Result
+{
+    SIMD_Vec3 *screen_space_vertices;
+    f32 *inv_w;
+};
+
+typedef struct Obj_Model_SIMD Obj_Model_SIMD;
+struct Obj_Model_SIMD
+{
+    SIMD_Vec3 vertices;
+};
+global Obj_Model_SIMD model_simd;
+global SIMD_Result result;
 
 typedef struct Vec2F32 Vec2F32;
 struct Vec2F32
@@ -776,6 +800,30 @@ internal void barycentric_with_edge_stepping(Params *params)
     }
 }
 
+internal Obj_Model_SIMD obj_to_simd(Obj_Model model)
+{
+    Obj_Model_SIMD result = {0};
+    u32 count = model.vertex_count;
+    if (model.vertex_count % 4 != 0)
+    {
+        count = (u32)roundf((f32)model.vertex_count / 4.0f) * 4.0f;
+        printf("Rounding %d to %d\n", model.vertex_count, count);
+    }
+
+    result.vertices.x = (f32*) malloc(sizeof(f32) * (count));
+    result.vertices.y = (f32*) malloc(sizeof(f32) * (count));
+    result.vertices.z = (f32*) malloc(sizeof(f32) * (count));
+    for(u32 vertex_index = 0; vertex_index < model.vertex_count; vertex_index++)
+    {
+        Vec3 model_vertex = model.vertices[vertex_index];
+        result.vertices.x[vertex_index] = model_vertex.x;
+        result.vertices.y[vertex_index] = model_vertex.y;
+        result.vertices.z[vertex_index] = model_vertex.z;
+    }
+
+    return result;
+}
+
 UPDATE_AND_RENDER(update_and_render)
 {
     // remove this must come from the invoker
@@ -833,6 +881,13 @@ UPDATE_AND_RENDER(update_and_render)
             printf("%s\n", msg);
 
         #endif
+        model_simd = obj_to_simd(model_teapot);
+
+        result.screen_space_vertices = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
+        result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
+        result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
+        result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
+        result.inv_w = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
         init = 1;
     }
     u32 black = 0xff000000;
@@ -953,192 +1008,134 @@ UPDATE_AND_RENDER(update_and_render)
     transformed_v2.y /= w_v2;
     */
     BeginTime("processing models", 1);
-    #if 1
+    #if 0
     {
-        for (u32 entity = 0; entity < entity_count; entity++)
-        //for (u32 entity = 0; entity < 1; entity++)
+        //for (u32 entity = 0; entity < entity_count; entity++)
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 g = 1.0f / tan(fov * 0.5f);
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 1.0f;
+        f32 zfar = 50.0f;
+        f32 k = zfar / (zfar - znear);
+        f32 g_over_aspect = g / aspect;
+        f32 minus_znear_times_k = -znear * k;
+
+        f32 one = 1.0f;
+        f32 half = 0.5f;
+
+        __m128 half_width  = _mm_set1_ps(0.5f * (f32)buffer->width);
+        __m128 half_height = _mm_set1_ps(0.5f * (f32)buffer->height);
+        for (u32 entity = 0; entity < 1; entity++)
         {
             Entity* e = entities + entity;
             Obj_Model *model = e->model;
             if(model->is_valid)
             {
-                Vec3 *screen_space_vertices = (Vec3*)malloc(sizeof(Vec3) * (model->vertex_count + 1));
-                f32 *inv_w = (f32*)malloc(sizeof(f32) * (model->vertex_count + 1));
-                for(u32 vertex_index = 1; vertex_index <= model->vertex_count; vertex_index++)
+                if (model->vertex_count % 4 != 0)
                 {
-                    Vec3 v = model->vertices[vertex_index];
-                    
+                    continue;
+                }
+                for(u32 vertex_index = 0; vertex_index < model->vertex_count; vertex_index+=4)
+                {
+                    f32 *x_prime = &model_simd.vertices.x[vertex_index];
+                    f32 *y_prime = &model_simd.vertices.y[vertex_index];
+                    f32 *z_prime = &model_simd.vertices.z[vertex_index];
+                    __m128 packed_x_prime = _mm_load_ps(x_prime);
+                    __m128 packed_y_prime = _mm_load_ps(y_prime);
+                    __m128 packed_z_prime = _mm_load_ps(z_prime);
+                    f32 s = 0.2f;
+                    __m128 scalar = _mm_load_ps1(&s);
+
                     // World space
-                    v = vec3_scalar(v, 0.2f);
+                    packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
+                    packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
+                    packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
+
+                    f32 x_translation = e->position.x;
+                    f32 y_translation = e->position.y;
+                    f32 z_translation = e->position.z;
+                    packed_x_prime = _mm_add_ps(packed_x_prime, _mm_load_ps1(&x_translation));
+                    packed_y_prime = _mm_add_ps(packed_y_prime, _mm_load_ps1(&y_translation));
+                    packed_z_prime = _mm_add_ps(packed_z_prime, _mm_load_ps1(&z_translation));
+
+                            //v0.x += e->position.x;
+                            //v0.y += e->position.y;
+                            //v0.z += e->position.z;
+                            
+                            //v1.x += e->position.x;
+                            //v1.y += e->position.y;
+                            //v1.z += e->position.z;
+
+                            //v2.x += e->position.x;
+                            //v2.y += e->position.y;
+                            //v2.z += e->position.z;
+
+                    __m128 view_space_packed_z = packed_z_prime;
+                    // perspective matrix
+                    // after: in clip space
+                    packed_x_prime = _mm_mul_ps(packed_x_prime, _mm_load_ps1(&g_over_aspect));
+                    packed_y_prime = _mm_mul_ps(packed_y_prime, _mm_load_ps1(&g));
+                    packed_z_prime = _mm_add_ps(_mm_mul_ps(packed_z_prime, _mm_load_ps1(&k)), _mm_load_ps1(&minus_znear_times_k));
+                    __m128 one    = _mm_set1_ps(1.0f);
+                    __m128 zero   = _mm_set1_ps(0.0f);
+
+                    // mask = 0xFFFFFFFF where w != 0, else 0
+                    __m128 mask = _mm_cmpneq_ps(view_space_packed_z, zero);
+
+                    // Numerator masked → 1.0 only in lanes where we will divide
+                    __m128 num = _mm_and_ps(one, mask);
+
+                    // Denominator masked → 0 in lanes where w == 0
+                    __m128 den = _mm_and_ps(view_space_packed_z, mask);
+
+                    // Now division executes only in valid lanes;
+                    // invalid lanes see 0/0 → undefined but masked off
+                    __m128 inv_w = _mm_div_ps(num, den);
+
+                    // Apply perspective divide only where mask == 1
+                    packed_x_prime = _mm_or_ps(
+                        _mm_and_ps(_mm_mul_ps(packed_x_prime, inv_w), mask),   // updated lanes
+                        _mm_andnot_ps(mask, packed_x_prime));                  // original lanes
+
+                    packed_y_prime = _mm_or_ps(
+                        _mm_and_ps(_mm_mul_ps(packed_y_prime, inv_w), mask),
+                        _mm_andnot_ps(mask, packed_y_prime));
+
+                    packed_z_prime = _mm_or_ps(
+                        _mm_and_ps(_mm_mul_ps(packed_z_prime, inv_w), mask),
+                        _mm_andnot_ps(mask, packed_z_prime));
+
+
+                    // viewport space
+                    // this: _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+                    // should be equivalent to: v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+                    // after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
+                    // or: v.x = v.x * half_width + half_width
+                    // same for v.y
+
+                    packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+                    packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, half_height), half_height);
                     
-                    v.x += e->position.x;
-                    v.y += e->position.y;
-                    v.z += e->position.z;
-                    
-                    // view space
-                    Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v.x, .y = v.y, .z = v.z, .w = 1});
-                    Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+                    _mm_store_ps(result.screen_space_vertices->x + vertex_index, packed_x_prime);
+                    _mm_store_ps(result.screen_space_vertices->y + vertex_index, packed_y_prime); 
+                    _mm_store_ps(result.screen_space_vertices->z + vertex_index, packed_z_prime); 
+                    _mm_store_ps(result.inv_w + vertex_index, inv_w); 
 
-                    f32 inv_w0;
-                    transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
-                    //BeginTime("transformation", 0);
-                    if(transformed_v0.w != 0)
-                    {
-                        inv_w0 = 1.0f / transformed_v0.w;
-                        transformed_v0.x *= inv_w0;
-                        transformed_v0.y *= inv_w0;
-                        transformed_v0.z *= inv_w0;
-                    }
-                    
-
-                    v.x = transformed_v0.x;
-                    v.y = transformed_v0.y;
-                    v.z = transformed_v0.z;
-
-
-                    v.x = (v.x * 0.5f + 0.5f) * buffer->width;
-                    #if FLIPPED_Y
-                    v.y = (1.0f - (v.y * 0.5f + 0.5f)) * buffer->height;
-                    #else
-                    v.y = ((v.y * 0.5f + 0.5f)) * buffer->height;
-                    #endif
-
-                    screen_space_vertices[vertex_index] = v;
-                    inv_w[vertex_index] = inv_w0;
                 }
 
 
-                for(int face_index = 1; face_index <= model->face_count; face_index++)
+                for(int face_index = 0; face_index < model->face_count; face_index++)
                 {
                     BeginTime("rendering models", 0);
                     {
                         Face face = model->faces[face_index];
-                        #if 1
-                        Vec3 v0 = screen_space_vertices[face.v[0]];
-                        Vec3 v1 = screen_space_vertices[face.v[1]];
-                        Vec3 v2 = screen_space_vertices[face.v[2]];
+                        Vec3 v0 = (Vec3) {result.screen_space_vertices->x[face.v[0] - 1], result.screen_space_vertices->y[face.v[0] - 1], result.screen_space_vertices->z[face.v[0] - 1]};
+                        Vec3 v1 = (Vec3) {result.screen_space_vertices->x[face.v[1] - 1], result.screen_space_vertices->y[face.v[1] - 1], result.screen_space_vertices->z[face.v[1] - 1]};
+                        Vec3 v2 = (Vec3) {result.screen_space_vertices->x[face.v[2] - 1], result.screen_space_vertices->y[face.v[2] - 1], result.screen_space_vertices->z[face.v[2] - 1]};
 
-                        f32 inv_w0 = inv_w[face.v[0]];
-                        f32 inv_w1 = inv_w[face.v[1]];
-                        f32 inv_w2 = inv_w[face.v[2]];
-                        #else
-                        Vec3 v0 = model->vertices[face.v[0]];
-                        Vec3 v1 = model->vertices[face.v[1]];
-                        Vec3 v2 = model->vertices[face.v[2]];
-
-                        if (model->has_normals)
-                        {
-                            Vec3 n0 = model->vertices[face.vn[0]];
-                            Vec3 n1 = model->vertices[face.vn[1]];
-                            Vec3 n2 = model->vertices[face.vn[2]];
-                        }
-
-
-                        #if ROTATION
-                        if(model == &model_f117)
-                        {
-                            v0 = vec3_rotate_z(v0, c_90, s_90);
-                            v1 = vec3_rotate_z(v1, c_90, s_90);
-                            v2 = vec3_rotate_z(v2, c_90, s_90);
-
-                            v0 = vec3_rotate_y(v0, c, s);
-                            v1 = vec3_rotate_y(v1, c, s);
-                            v2 = vec3_rotate_y(v2, c, s);
-                        }
-                        else
-                        {
-                            v0 = vec3_rotate_y(v0, c, s);
-                            v1 = vec3_rotate_y(v1, c, s);
-                            v2 = vec3_rotate_y(v2, c, s);
-                        }
-                        #endif
-                        
-                        // World space
-                        v0 = vec3_scalar(v0, 0.2f);
-                        v1 = vec3_scalar(v1, 0.2f);
-                        v2 = vec3_scalar(v2, 0.2f);
-                        
-                        v0.x += e->position.x;
-                        v0.y += e->position.y;
-                        v0.z += e->position.z;
-                        
-                        v1.x += e->position.x;
-                        v1.y += e->position.y;
-                        v1.z += e->position.z;
-
-                        v2.x += e->position.x;
-                        v2.y += e->position.y;
-                        v2.z += e->position.z;
-                        
-                        // view space
-                        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
-                        Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
-                        Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
-                        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
-                        Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
-                        Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
-
-                        f32 inv_w0;
-                        f32 inv_w1;
-                        f32 inv_w2;
-                        // remember that the projection matrix stores de viewspace z value in its w
-                        // but the result vector is in clip space so z is in clip space, not in 
-                        // viewspace, they are not the same zz
-                        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
-                        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
-                        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
-                        //BeginTime("transformation", 0);
-                        if(transformed_v0.w != 0)
-                        {
-                            inv_w0 = 1.0f / transformed_v0.w;
-                            transformed_v0.x *= inv_w0;
-                            transformed_v0.y *= inv_w0;
-                            transformed_v0.z *= inv_w0;
-                        }
-                        
-                        if(transformed_v1.w != 0)
-                        {
-                            inv_w1 = 1.0f / transformed_v1.w;
-                            transformed_v1.x *= inv_w1;
-                            transformed_v1.y *= inv_w1;
-                            transformed_v1.z *= inv_w1;
-                        }
-                        
-                        if(transformed_v2.w != 0)
-                        {
-                            inv_w2 = 1.0f / transformed_v2.w;
-                            transformed_v2.x *= inv_w2;
-                            transformed_v2.y *= inv_w2;
-                            transformed_v2.z *= inv_w2;
-                        }
-
-                        v0.x = transformed_v0.x;
-                        v0.y = transformed_v0.y;
-                        v0.z = transformed_v0.z;
-
-                        v1.x = transformed_v1.x;
-                        v1.y = transformed_v1.y;
-                        v1.z = transformed_v1.z;
-
-                        v2.x = transformed_v2.x;
-                        v2.y = transformed_v2.y;
-                        v2.z = transformed_v2.z;
-
-
-                        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-                        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-                        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-                        #if FLIPPED_Y
-                        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
-                        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
-                        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
-                        #else
-                        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
-                        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
-                        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
-                        #endif
-                        #endif
-
+                        f32 inv_w0 = result.inv_w[face.v[0] - 1];
+                        f32 inv_w1 = result.inv_w[face.v[1] - 1];
+                        f32 inv_w2 = result.inv_w[face.v[2] - 1];
 
                         f32 min_x = Min(Min(v0.x, v1.x), v2.x);
                         f32 min_y = Min(Min(v0.y, v1.y), v2.y);
@@ -1152,7 +1149,6 @@ UPDATE_AND_RENDER(update_and_render)
                         Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
                         Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
                         Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
-                        EndTime();
 
                         /////draw_triangle__scanline(buffer, v0, v1, v2, color);
                         Params params = 
@@ -1164,15 +1160,12 @@ UPDATE_AND_RENDER(update_and_render)
                             min_x, max_x, min_y, max_y
                         };
 
-                        params.buffer = buffer;
-                        params.depth_buffer = depth_buffer;
+						params.buffer = buffer;
+						params.depth_buffer = depth_buffer;
                         barycentric_with_edge_stepping(&params);
-                        //olivec_params(&params);
-                        //naive()
                     }
+                    EndTime();
                 }
-                free(screen_space_vertices);
-                free(inv_w);
             }
         }
     }
@@ -1180,28 +1173,28 @@ UPDATE_AND_RENDER(update_and_render)
     {
         #if 1
         {
-            for (u32 entity = 0; entity < entity_count; entity++)
-            //for (u32 entity = 0; entity < 1; entity++)
+            //for (u32 entity = 0; entity < entity_count; entity++)
+            for (u32 entity = 0; entity < 1; entity++)
             {
                 Entity* e = entities + entity;
                 Obj_Model *model = e->model;
                 if(model->is_valid)
                 {
-                    for(int face_index = 1; face_index <= model->face_count; face_index++)
+                    for(int face_index = 0; face_index <= model->face_count; face_index++)
                     {
                         BeginTime("rendering models", 0);
                         {
                             u32 color = blue;
                             Face face = model->faces[face_index];
-                            Vec3 v0 = model->vertices[face.v[0]];
-                            Vec3 v1 = model->vertices[face.v[1]];
-                            Vec3 v2 = model->vertices[face.v[2]];
+                            Vec3 v0 = model->vertices[face.v[0] - 1];
+                            Vec3 v1 = model->vertices[face.v[1] - 1];
+                            Vec3 v2 = model->vertices[face.v[2] - 1];
 
                             if (model->has_normals)
                             {
-                                Vec3 n0 = model->vertices[face.vn[0]];
-                                Vec3 n1 = model->vertices[face.vn[1]];
-                                Vec3 n2 = model->vertices[face.vn[2]];
+                                Vec3 n0 = model->vertices[face.vn[0] - 1];
+                                Vec3 n1 = model->vertices[face.vn[1] - 1];
+                                Vec3 n2 = model->vertices[face.vn[2] - 1];
                             }
 
 

@@ -158,8 +158,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                             i++;
                         }
                         at++;
-                        model.vertex_count++;
-                        model.vertices[model.vertex_count] = (Vec3){coords[0], coords[1], coords[2]};
+                        model.vertices[model.vertex_count++] = (Vec3){coords[0], coords[1], coords[2]};
                         //printf("v %.7f %.7f %.7f\n", coords[0], coords[1], coords[2]);
                         //printf("v %.7f %.7f %.7f\n", coords2[0], coords2[1], coords2[2]);
                     }break;
@@ -237,8 +236,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                     at++;
 					j++;
 				}
-				model.face_count++;
-				model.faces[model.face_count] = face;
+				model.faces[model.face_count++] = face;
 				//printf("f %d/%d/%d %d/%d/%d %d/%d/%d\n", face.packed_data[0],face.packed_data[1],face.packed_data[2],face.packed_data[3],face.packed_data[4],face.packed_data[5], face.packed_data[6], face.packed_data[7], face.packed_data[8]);
 				//printf("f %d/%d/%d %d/%d/%d %d/%d/%d\n", face.v[0],face.vt[0],face.vn[0],face.v[1],face.vt[1],face.vn[1], face.v[2], face.vt[2], face.vn[2]);
 			} break;

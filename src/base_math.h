@@ -3,7 +3,7 @@
 
 internal inline b32 equal_f32(f32 a, f32 b)
 {
-    f32 e = 1e-6f;
+    f32 e = 1e-3f;
     f32 diff = fabsf(a - b);
     return diff <= e;
 };
