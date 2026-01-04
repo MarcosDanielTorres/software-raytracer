@@ -14,7 +14,7 @@ struct Software_Depth_Buffer
     i32 width;
     i32 height;
     BITMAPINFO info;
-    u32 *data;
+    f32 *data;
 };
 
 typedef struct OS_W32_Window OS_W32_Window;

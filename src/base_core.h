@@ -33,3 +33,5 @@ typedef uint32_t b32;
 #define ClampTop(a, b) (Min(a, b))
 #define Clamp(a, b, c) (ClampTop(ClampBot(a, b), c))
 #define ArrayCount(a) (sizeof(a) / sizeof(*a))
+
+global f32 max_f32 = 3.402823466e+38F;

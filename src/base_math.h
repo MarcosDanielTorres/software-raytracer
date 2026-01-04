@@ -45,6 +45,10 @@ inline f32 vec3_dot(Vec3 a, Vec3 b)
     f32 result = (f32){ a.x * b.x + a.y * b.y + a.z * b.z };
     return result;
 }
+inline f32 cross_2d(f32 ax, f32 ay, f32 bx, f32 by)
+{
+    return ax * by - ay * bx;
+}
 
 inline Vec3 vec3_cross(Vec3 a, Vec3 b)
 {
@@ -215,6 +219,7 @@ Mat4 mat4_make_reverse_infinite_perspective(f32 fov, f32 aspect, f32 znear, f32 
     return m;
 }
 
+// This is a left-handed perspective matrix, with the range: x [-1, 1], y: [-1, 1] and z: [0, 1]
 Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     f32 g = 1.0f / tan(fov * 0.5);
     f32 k = zfar / (zfar - znear);

@@ -108,10 +108,8 @@ int main ()
 
     i32 buffer_width = 640;
     i32 buffer_height = 480;
-    buffer_width = window_width;
-    buffer_height = window_height;
-    //buffer_width = 1920;
-    //buffer_height = 1080;
+    buffer_width = 1920;
+    buffer_height = 1080;
     WNDCLASSEXW wnd_class = 
     {
         .cbSize = sizeof(WNDCLASSEXW),
@@ -171,7 +169,7 @@ int main ()
 	buffer->info.bmiHeader.biWidth = buffer->width;
 	buffer->info.bmiHeader.biHeight = -buffer->height;
 	buffer->info.bmiHeader.biPlanes = 1;
-	buffer->info.bmiHeader.biBitCount = sizeof(u32) * 8;
+	buffer->info.bmiHeader.biBitCount = 32;
 	buffer->info.bmiHeader.biCompression = BI_RGB;
 	buffer->info.bmiHeader.biSizeImage = 0;
 	buffer->info.bmiHeader.biXPelsPerMeter = 0;
@@ -182,13 +180,13 @@ int main ()
     depth_buffer = VirtualAlloc(0, sizeof(Software_Depth_Buffer), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     depth_buffer->width = buffer_width;
     depth_buffer->height = buffer_height;
-    depth_buffer->data = VirtualAlloc(0, sizeof(u32) * buffer->width * buffer->height, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    depth_buffer->data = VirtualAlloc(0, sizeof(f32) * buffer->width * buffer->height, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     
     depth_buffer->info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	depth_buffer->info.bmiHeader.biWidth = buffer->width;
 	depth_buffer->info.bmiHeader.biHeight = -buffer->height;
 	depth_buffer->info.bmiHeader.biPlanes = 1;
-	depth_buffer->info.bmiHeader.biBitCount = sizeof(u32) * 8;
+	depth_buffer->info.bmiHeader.biBitCount = 32;
 	depth_buffer->info.bmiHeader.biCompression = BI_RGB;
 	depth_buffer->info.bmiHeader.biSizeImage = 0;
 	depth_buffer->info.bmiHeader.biXPelsPerMeter = 0;
@@ -225,7 +223,6 @@ int main ()
         LONGLONG dt = now - last_time;
         total_time += dt;
         last_time = now;
-        // ver sie lafrican head tarda 15 en debug tambien en tinyrenderr project
         //printf("Game loop: %.2fms\n", timer_os_time_to_ms(dt));
         win32_process_pending_msgs();
 

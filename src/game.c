@@ -9,9 +9,11 @@
 // TODO At the time, rendering 4 entities takes roughly 40ms in debug build. And 20% of the time is spent doing model world camera perspective ndc viewport
 //      calculations. And 80% is the actual rendering!
 //      I will try to use simd to cut this 20% as much as possible
-//      In realse builds it seems this is closer to a 10%, but still i want to have my debug builds optimized. It's not acceptable not to!
-// TODO Try optimizing in differnet ways lets fucking do simd fuuuuuuuck
-//
+//      In release builds it seems this is closer to a 10%, but still i want to have my debug builds optimized. It's not acceptable not to!
+//      
+//      After adding SIMD in stage 1 I'm seeing better results. Altough nothing extremely fancy. I could try with more models or just use simd on the rasterization process
+// NOTE my depth calculations are done using view space z instead of ndc z. It appears to be better to do it in NDC space
+//   Reverse depth has nothing to do with this, they are orthogonal concepts!
 
 #include "base_core.h"
 #include "base_os.h"
@@ -24,7 +26,13 @@
 #include <assert.h>
 #include <immintrin.h>
 
-#define PROFILE 1
+#define SIMD 0
+#ifndef SIMD
+    #define SIMD 0  
+#endif
+
+
+#define PROFILE 0
 #ifndef PROFILE
     #define PROFILE 0  
 #endif
@@ -38,12 +46,18 @@
 #ifndef SHOW_DEPTH_BUFFER
     #define SHOW_DEPTH_BUFFER 0  
 #endif
-#define FLIPPED_Y 0
+
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 0
 
+#define FLIPPED_Y 0
+#define BACKFACE_CULLING 0
+#ifndef BACKFACE_CULLING
+    #define BACKFACE_CULLING 0  
+#endif
+
 #define EDGE_FUNCTIONS 0
-#define OLIVEC 1
+#define OLIVEC 0
 
 #define EDGE_STEPPING 0
 #ifndef EDGE_STEPPING
@@ -562,7 +576,11 @@ static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
     #if REVERSE_DEPTH_VALUE
     memset((void*)buffer->data, 0x00, buffer->width * buffer->height * 4);
     #else
-    memset((void*)buffer->data, 0xFF, buffer->width * buffer->height * 4);
+    for(u32 i = 0; i < buffer->width * buffer->height; i++)
+    {
+        buffer->data[i] = max_f32;
+    }
+    //memset((void*)buffer->data, 0xFF, buffer->width * buffer->height * 4);
     #endif
 }
 
@@ -688,6 +706,206 @@ internal void olivec_params(Params *params)
     }
 }
 
+internal void barycentric_with_edge_stepping_SIMD(Params *params)
+{
+    Vec3 v0 = params->v0;
+    Vec3 v1 = params->v1;
+    Vec3 v2 = params->v2;
+    Vec3 v0_color = params->v0_color;
+    Vec3 v1_color = params->v1_color;
+    Vec3 v2_color = params->v2_color;
+    f32 inv_w0 = params->inv_w0;
+    f32 inv_w1 = params->inv_w1;
+    f32 inv_w2 = params->inv_w2;
+    u32 min_x = params->min_x;
+    u32 max_x = params->max_x;
+    u32 min_y = params->min_y;
+    u32 max_y = params->max_y;
+
+    Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
+    Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
+    Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    f32 area = edge(s0, s1, s2);          // signed
+
+    f32 inv_area = 1.0f / area;
+    // edge stepping basically
+    // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
+    f32 e0_dx = (s2.y - s1.y);  f32 e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
+    f32 e1_dx = (s0.y - s2.y);  f32 e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
+    f32 e2_dx = (s1.y - s0.y);  f32 e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
+
+    // Evaluate at top-left of bbox (pixel center)
+    f32 start_x = (f32)min_x + 0.5f;
+    f32 start_y = (f32)min_y + 0.5f;
+    Vec2F32 p0 = { start_x, start_y };
+    f32 row_w0 = edge(s1, s2, p0);
+    f32 row_w1 = edge(s2, s0, p0);
+    f32 row_w2 = edge(s0, s1, p0);
+
+    b32 e0_inc = is_top_left(s1, s2);
+    b32 e1_inc = is_top_left(s2, s0);
+    b32 e2_inc = is_top_left(s0, s1);
+
+    u32 depth_buffer_stride = params->depth_buffer->width;
+    f32 eps = -1e-4f;
+    int lx, hx, ly, hy;
+    __m128 v_e0_dx = _mm_set1_ps(e0_dx);
+    __m128 v_e1_dx = _mm_set1_ps(e1_dx);
+    __m128 v_e2_dx = _mm_set1_ps(e2_dx);
+    __m128 v_zero = _mm_set1_ps(0.0f);
+    __m128 v_eps = _mm_set1_ps(eps);
+    __m128 lane = _mm_set_ps(3,2,1,0);
+
+    {
+        for (u32 y = min_y; y < max_y; y++)
+        {
+            u32 x = min_x;
+            f32 base_w0 = row_w0;
+            f32 base_w1 = row_w1;
+            f32 base_w2 = row_w2;
+
+            u32 simd_end = max_x & ~3u;
+            for (; x < max_x && (x & 3u) != 0; x++)
+            {
+                f32 dx = (f32)(x - min_x);
+                
+                f32 w0 = base_w0 + dx * e0_dx;
+                f32 w1 = base_w1 + dx * e1_dx;
+                f32 w2 = base_w2 + dx * e2_dx;
+
+                b32 inside =
+                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+                    (e2_inc ? w2 >= 0.f : w2 > eps);
+                if (inside)
+                {
+                    f32 b0 = w0 * inv_area;
+                    f32 b1 = w1 * inv_area;
+                    f32 b2 = w2 * inv_area;
+                    f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
+                }
+            }
+
+            for (; x + 3 < max_x; x += 4)
+            {
+                __m128 v_dx = _mm_add_ps(_mm_set1_ps((f32)(x - min_x)), lane);
+                __m128 w0 = _mm_add_ps(_mm_set1_ps(base_w0), _mm_mul_ps(v_dx, v_e0_dx));
+                __m128 w1 = _mm_add_ps(_mm_set1_ps(base_w1), _mm_mul_ps(v_dx, v_e1_dx));
+                __m128 w2 = _mm_add_ps(_mm_set1_ps(base_w2), _mm_mul_ps(v_dx, v_e2_dx));
+
+                __m128 mask_e0 = e0_inc ? _mm_cmpge_ps(w0, v_zero) : _mm_cmpgt_ps(w0, v_eps);
+                __m128 mask_e1 = e1_inc ? _mm_cmpge_ps(w1, v_zero) : _mm_cmpgt_ps(w1, v_eps);
+                __m128 mask_e2 = e2_inc ? _mm_cmpge_ps(w2, v_zero) : _mm_cmpgt_ps(w2, v_eps);
+                __m128 inside = _mm_and_ps(_mm_and_ps(mask_e0, mask_e1), mask_e2);
+                b32 inside_mask = _mm_movemask_ps(inside);
+                if (inside_mask == 0) continue;
+                float w0_arr[4], w1_arr[4], w2_arr[4];
+                _mm_storeu_ps(w0_arr, w0);
+                _mm_storeu_ps(w1_arr, w1);
+                _mm_storeu_ps(w2_arr, w2);
+
+                for (int lane = 0; lane < 4; ++lane)
+                {
+                    if ((inside_mask & (1 << lane)) == 0)
+                        continue; // lane is outside triangle
+
+                    u32 px = x + (u32)lane;
+                    u32 index = y * depth_buffer_stride + px;
+                    //f32 *depth_row = params->depth_buffer->data + y * depth_buffer_stride;
+
+                    f32 w0s = w0_arr[lane];
+                    f32 w1s = w1_arr[lane];
+                    f32 w2s = w2_arr[lane];
+
+                    f32 b0 = w0s * inv_area;
+                    f32 b1 = w1s * inv_area;
+                    f32 b2 = w2s * inv_area;
+
+                    f32 inv_w_interp = b0 * inv_w0 + b1 * inv_w1 + b2 * inv_w2;
+                    f32 depth_val =
+                        (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+
+                    if(depth_val < params->depth_buffer->data[index])
+                    {
+                        params->depth_buffer->data[index] = depth_val;
+
+                        Vec3 interpolated_color =
+                            vec3_add(
+                                vec3_add(
+                                    vec3_scalar(v0_color, b0),
+                                    vec3_scalar(v1_color, b1)),
+                                vec3_scalar(v2_color, b2));
+
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 color_u32 = 0;
+                        color_u32 |= (0xFFu << 24)
+                            | (((u32)final_color.x & 0xFFu) << 16)
+                            | (((u32)final_color.y & 0xFFu) << 8)
+                            | (((u32)final_color.z & 0xFFu) << 0);
+
+                        draw_pixel(params->buffer, px, y, color_u32);
+                    }
+                }
+            }
+
+            for (; x < max_x; x++)
+            {
+                f32 dx = (f32)(x - min_x);
+                
+                f32 w0 = base_w0 + dx * e0_dx;
+                f32 w1 = base_w1 + dx * e1_dx;
+                f32 w2 = base_w2 + dx * e2_dx;
+
+                b32 inside =
+                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+                    (e2_inc ? w2 >= 0.f : w2 > eps);
+                if (inside)
+                {
+                    f32 b0 = w0 * inv_area;
+                    f32 b1 = w1 * inv_area;
+                    f32 b2 = w2 * inv_area;
+                    f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
+                }
+            }
+            row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
+        }
+    }
+}
+
 internal void barycentric_with_edge_stepping(Params *params)
 {
     Vec3 v0 = params->v0;
@@ -708,17 +926,20 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
     Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
     f32 area = edge(s0, s1, s2);          // signed
-    #if 0
-    if (area < 0.0f)
+    #if FLIPPED_Y
+    if (area < 0.0f) // is CW
     {
-        
-        Swap(v1, v2);
-        Swap(v1_color, v2_color);
-        Swap(inv_w1, inv_w2);
+        //Swap(v1, v2);
+        //Swap(v1_color, v2_color);
+        //Swap(inv_w1, inv_w2);
 
-        Swap(s1, s2);
+        //Swap(s1, s2);
 
-        area = -area;
+        //area = -area;
+    }
+    #else
+    if(area > 0.0f) // is CW
+    {
     }
     #endif
 
@@ -889,6 +1110,84 @@ UPDATE_AND_RENDER(update_and_render)
         result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
         result.inv_w = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
         init = 1;
+
+        {
+            f32 ax = 1;
+            f32 ay = 2;
+            f32 bx = 1;
+            f32 by = 4;
+            f32 px = 0;
+            f32 py = 0;
+            f32 cx = 0;
+            f32 cy = 0;
+            f32 dx = 0;
+            f32 dy = 0;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", ax, ay, bx, by, cross_2d(ax, ay, bx, by));
+
+            ax = -5;
+            ay = 4;
+            bx = -7;
+            by = 5;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", ax, ay, bx, by, cross_2d(ax, ay, bx, by));
+            printf("\nedge testing\n\n");
+
+            ax = -5;
+            ay = 4;
+            bx = -7;
+            by = 5;
+            px = -6;
+            py = 2;
+
+            // (b - a) ^ (p - a)
+            cx = bx - ax;
+            cy = by - ay;
+            dx = px - ax;
+            dy = py - ay;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", cx, cy, dx, dy, cross_2d(cx, cy, dx, dy));
+
+            // (p - a) ^ (b - a)
+            cx = bx - ax;
+            cy = by - ay;
+            dx = px - ax;
+            dy = py - ay;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", dx, dy, cx, cy, cross_2d(dx, dy, cx, cy));
+
+            // (a - p) ^ (b - p)
+            cx = ax - px;
+            cy = ay - py;
+            dx = bx - px;
+            dy = by - py;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", cx, cy, dx, dy, cross_2d(cx, cy, dx, dy));
+
+            // (b - p) ^ (a - p)
+            cx = ax - px;
+            cy = ay - py;
+            dx = bx - px;
+            dy = by - py;
+            printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", dx, dy, cx, cy, cross_2d(dx, dy, cx, cy));
+
+            #if FLIPPED_Y
+                printf("Y+ goes up\n");
+                #if BACKFACE_CULLING
+                    printf("Discarding triangle which area is negative\n");
+                    printf("Vertices must be defined in CCW order\n");
+                #else
+                    printf("Discarding triangle which area is positive\n");
+                    printf("Vertices must be defined in CW order\n");
+                #endif
+            #else
+                printf("Y+ goes down\n");
+                #if BACKFACE_CULLING
+                    printf("Discarding triangle which area is positive\n");
+                    printf("Vertices must be defined in CCW order\n");
+                #else
+                    printf("Discarding triangle which area is negative\n");
+                    printf("Vertices must be defined in CW order\n");
+                #endif
+            #endif
+
+        }
+
     }
     u32 black = 0xff000000;
     u32 white = 0xffffffff;
@@ -1008,7 +1307,7 @@ UPDATE_AND_RENDER(update_and_render)
     transformed_v2.y /= w_v2;
     */
     BeginTime("processing models", 1);
-    #if 0
+    #if SIMD
     {
         //for (u32 entity = 0; entity < entity_count; entity++)
         f32 fov = 3.141592 / 3.0; // 60 deg
@@ -1035,6 +1334,13 @@ UPDATE_AND_RENDER(update_and_render)
                 {
                     continue;
                 }
+                f32 s = 0.4f;
+                __m128 scalar = _mm_load_ps1(&s);
+
+                __m128 x_translation = _mm_set1_ps(e->position.x);
+                __m128 y_translation = _mm_set1_ps(e->position.y);
+                __m128 z_translation = _mm_set1_ps(e->position.z);
+
                 for(u32 vertex_index = 0; vertex_index < model->vertex_count; vertex_index+=4)
                 {
                     f32 *x_prime = &model_simd.vertices.x[vertex_index];
@@ -1043,32 +1349,15 @@ UPDATE_AND_RENDER(update_and_render)
                     __m128 packed_x_prime = _mm_load_ps(x_prime);
                     __m128 packed_y_prime = _mm_load_ps(y_prime);
                     __m128 packed_z_prime = _mm_load_ps(z_prime);
-                    f32 s = 0.2f;
-                    __m128 scalar = _mm_load_ps1(&s);
 
                     // World space
                     packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
                     packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
                     packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
 
-                    f32 x_translation = e->position.x;
-                    f32 y_translation = e->position.y;
-                    f32 z_translation = e->position.z;
-                    packed_x_prime = _mm_add_ps(packed_x_prime, _mm_load_ps1(&x_translation));
-                    packed_y_prime = _mm_add_ps(packed_y_prime, _mm_load_ps1(&y_translation));
-                    packed_z_prime = _mm_add_ps(packed_z_prime, _mm_load_ps1(&z_translation));
-
-                            //v0.x += e->position.x;
-                            //v0.y += e->position.y;
-                            //v0.z += e->position.z;
-                            
-                            //v1.x += e->position.x;
-                            //v1.y += e->position.y;
-                            //v1.z += e->position.z;
-
-                            //v2.x += e->position.x;
-                            //v2.y += e->position.y;
-                            //v2.z += e->position.z;
+                    packed_x_prime = _mm_add_ps(packed_x_prime, x_translation);
+                    packed_y_prime = _mm_add_ps(packed_y_prime, y_translation);
+                    packed_z_prime = _mm_add_ps(packed_z_prime, z_translation);
 
                     __m128 view_space_packed_z = packed_z_prime;
                     // perspective matrix
@@ -1120,7 +1409,6 @@ UPDATE_AND_RENDER(update_and_render)
                     _mm_store_ps(result.screen_space_vertices->y + vertex_index, packed_y_prime); 
                     _mm_store_ps(result.screen_space_vertices->z + vertex_index, packed_z_prime); 
                     _mm_store_ps(result.inv_w + vertex_index, inv_w); 
-
                 }
 
 
@@ -1162,7 +1450,7 @@ UPDATE_AND_RENDER(update_and_render)
 
 						params.buffer = buffer;
 						params.depth_buffer = depth_buffer;
-                        barycentric_with_edge_stepping(&params);
+                        barycentric_with_edge_stepping_SIMD(&params);
                     }
                     EndTime();
                 }
@@ -1171,7 +1459,7 @@ UPDATE_AND_RENDER(update_and_render)
     }
     #else
     {
-        #if 1
+        #if 0
         {
             //for (u32 entity = 0; entity < entity_count; entity++)
             for (u32 entity = 0; entity < 1; entity++)
@@ -1219,9 +1507,9 @@ UPDATE_AND_RENDER(update_and_render)
                             #endif
                             
                             // World space
-                            v0 = vec3_scalar(v0, 0.2f);
-                            v1 = vec3_scalar(v1, 0.2f);
-                            v2 = vec3_scalar(v2, 0.2f);
+                            v0 = vec3_scalar(v0, 0.5f);
+                            v1 = vec3_scalar(v1, 0.5f);
+                            v2 = vec3_scalar(v2, 0.5f);
                             
                             v0.x += e->position.x;
                             v0.y += e->position.y;
@@ -1234,9 +1522,6 @@ UPDATE_AND_RENDER(update_and_render)
                             v2.x += e->position.x;
                             v2.y += e->position.y;
                             v2.z += e->position.z;
-                            
-
-
                             
                             // view space
                             Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
@@ -1358,11 +1643,34 @@ UPDATE_AND_RENDER(update_and_render)
             //Vec4 v0_v4 = (Vec4) {0.0,  0.7, 35.0, 1.0f};
             //Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
             //Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
+        
 
-            //  CCW
-            Vec4 v0_v4 = (Vec4) {0.0,  0.7, 50.0, 1.0f};
-            Vec4 v1_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};
-            Vec4 v2_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f};
+            /*
+                Okay so there are two possible interpretations of this.
+                
+                I can define the vertices of some triangle on a clockwise or in a counter-clockwise manner. This will depend on how I'm thinking about the vertices.
+                Because I use the wedge product which is defined in a right-hand coordinate system to see if triangles are counter or clockwise formed. It matters that
+                these vertices are specified in this coordinate system. So if the wedge product is positive then they are counter-clockwise and if the wedge product is negative
+                they are clockwise.
+
+                But the stage where I perform the culling matters. Because I said I'm using the wedge product as defined in a right-hand coordinate system. If the vertices
+                end up in another system then I have to reinterpret the meaning of the signed area.
+                Right now I'm not sure where I should apply face culling so I'm doing it after viewport transform. Now... if I defined the vertex in clockwise order but at the time
+                I was thinking of the screen having coordinates Y+ up and X+ right then that means the area is positive if they are counter-clockwise.
+                But if I flipped them that means that now, the vertices should be interpreted 
+            
+            */
+                #if BACKFACE_CULLING
+                // Defined in CCW relative to ME thinking that Y+ up and X+ right
+                Vec4 v0_v4 = (Vec4) {0.0,  0.7, 10.0, 1.0f}; // red
+                Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f}; // blue
+                Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};  // green
+                #else
+                // Defined in CW relative to ME thinking that Y+ up and X+ right
+                Vec4 v0_v4 = (Vec4) {0.0,  0.7, 50.0, 1.0f}; // red
+                Vec4 v1_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};  // green
+                Vec4 v2_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f}; // blue
+                #endif
             // if i get them smaller i get a much better framerate!
 
 
@@ -1440,12 +1748,12 @@ UPDATE_AND_RENDER(update_and_render)
             Params params = {view, persp, v0, v1, v2, vv0_color, vv1_color, vv2_color, inv_w0, inv_w1, inv_w2, minx, maxx, miny, maxy};
             params.buffer = buffer;
             params.depth_buffer = depth_buffer;
-            barycentric_with_edge_stepping(&params);
+            //barycentric_with_edge_stepping(&params);
 
-            #if 0
             Vec3 plane_normal_of_triangle = vec3_cross(vec3_sub(v1, v0), vec3_sub(v2, v0));
             f32 area_of_parallelogram = vec3_magnitude(plane_normal_of_triangle);
             f32 area_of_triangle = area_of_parallelogram / 2.0f;
+            #if 0
 
             #if EDGE_FUNCTIONS
             Vec2F32 s0 = { v0_v4.x, v0_v4.y };
@@ -1577,7 +1885,6 @@ UPDATE_AND_RENDER(update_and_render)
                     int lx, hx, ly, hy;
                     //if(olivec_normalize_triangle(buffer->width, buffer->height, v0.x, v0.y, v1.x, v1.y, v2.x, v2.y, &lx, &hx, &ly, &hy))
                     {
-                        for (u32 i = 0; i <= 10; i++)
                         {
                             for (u32 y = miny; y <= maxy; y++)
                             {
@@ -1609,7 +1916,35 @@ UPDATE_AND_RENDER(update_and_render)
                         }
                     }
                 #else
-                    for (u32 i = 0; i <= 10; i++)
+                // NAIVE
+                    f32 area_maybe = edge((Vec2F32){v0.x, v0.y}, (Vec2F32){v1.x, v1.y}, (Vec2F32){v2.x, v2.y});
+                    b32 skip = 0;
+                    #if FLIPPED_Y
+                        #if BACKFACE_CULLING
+                        if(area_maybe < 0.0f) // cw
+                        {
+                            skip = 1;
+                        }
+                        #else
+                        if(area_maybe > 0.0f) // ccw
+                        {
+                            skip = 1;
+                        }
+                        #endif
+                    #else
+                        #if BACKFACE_CULLING
+                        if(area_maybe > 0.0f) // cw
+                        {
+                            skip = 1;
+                        }
+                        #else
+                        if(area_maybe < 0.0f) // ccw
+                        {
+                            skip = 1;
+                        }
+                        #endif
+                    #endif
+                    if (!skip)
                     {
                         for (u32 y = miny; y <= maxy; y++)
                         {
@@ -1619,6 +1954,7 @@ UPDATE_AND_RENDER(update_and_render)
                                 Vec3 area_subtriangle_v1v2p = vec3_cross(vec3_sub(v2, v1), vec3_sub(p, v1));
                                 Vec3 area_subtriangle_v2v0p = vec3_cross(vec3_sub(v0, v2), vec3_sub(p, v2));
                                 Vec3 area_subtriangle_v0v1p = vec3_cross(vec3_sub(v1, v0), vec3_sub(p, v0));
+
                                 f32 u = vec3_magnitude(area_subtriangle_v1v2p) / 2.0f / area_of_triangle;
                                 f32 v = vec3_magnitude(area_subtriangle_v2v0p) / 2.0f / area_of_triangle;
                                 f32 w = 1.0f - u - v;
