@@ -1,0 +1,408 @@
+Can you tell if in this repo they are using edge function or edge stepping for barycentric coordinates? if they are even using barycentric coordinates
+26 references
+Copilot said: Short answer: Yes — the rasterizers use
+Short answer: Yes — the rasterizers use edge functions to compute barycentric coordinates and they evaluate those edge functions incrementally (edge-stepping).
+
+Details & evidence
+
+The code explicitly builds edge-function coefficients A, B, C for each triangle edge (comment: "Fab(x, y) = Ax + By + C"):
+TransformedAABBoxScalar.cpp: A0/A1/A2, B0/B1/B2, C0/C1/C2 are computed (see lines around here):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/TransformedAABBoxScalar.cpp#L133-L184
+They evaluate the edge functions at the starting pixel and then step them across rows/columns (incremental updates):
+alpha0 = (A0 * col) + (B0 * row) + C0; then inside loops alpha = alpha + A0 per column and alpha0 += B0 per row — classic edge stepping. Example (scalar rasterizer):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/TransformedAABBoxScalar.cpp#L176-L244
+SSE versions do the same with vector/integer arithmetic and incremental adds (see e.g. TransformedAABBoxSSE.cpp and DepthBufferRasterizerSSE*.cpp):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/TransformedAABBoxSSE.cpp#L278-L332 and https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/DepthBufferRasterizerSSEST.cpp#L311-L365
+They use those edge-function values (alpha, beta, gamma) as barycentric tests (mask = alpha | beta | gama) and to interpolate depth:
+Depth interpolation uses precomputed Z coefficients: depth = Z[0] + Z[1]*beta + Z[2]*gama, where Z[1]/Z[2] were scaled by 1/triArea (so these are the barycentric weights used to interpolate Z). See e.g. DepthBufferRasterizerScalarST.cpp:
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/DepthBufferRasterizerScalarST.cpp#L236-L300
+Conclusion
+
+The implementation uses edge functions (Fab(x,y) = Ax + By + C) to get the three barycentric/edge values and performs incremental edge-stepping (adding A per x and B per y) across the bounding box to test pixels and compute interpolated depth. So yes — barycentric coordinates are used and they are computed via edge functions with incremental stepping.
+Note about search results
+
+My findings come from searching the repository code. The code search results may be incomplete; you can view more matches in the GitHub UI here: https://github.com/rygorous/intel_occlusion_cull/search?q=barycentric&type=code
+If you want, I can paste the small relevant code excerpts (alpha/beta/gama computation and the stepping loops) inline for easier reading.
+
+You said: yes please paste them and with references
+yes please paste them and with references as well
+Copilot said: Below are the in-repo excerpts that show
+Below are the in-repo excerpts that show the edge-function coefficients (A/B/C), their incremental (edge-stepping) evaluation, and the use of those values as barycentric weights for depth interpolation.
+
+Note: these are selected snippets from the repository search — the search results may be incomplete. View more matches in the GitHub UI: https://github.com/rygorous/intel_occlusion_cull/search?q=Fab&type=code
+
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / TransformedAABBoxScalar.cpp
+v1
+// Fab(x, y) =     Ax       +       By     +      C              = 0
+// Fab(x, y) = (ya - yb)x   +   (xb - xa)y + (xa * yb - xb * ya) = 0
+// Compute A = (ya - yb) for the 3 line segments that make up each triangle
+int A0 = fxPtY[1] - fxPtY[2];
+int A1 = fxPtY[2] - fxPtY[0];
+int A2 = fxPtY[0] - fxPtY[1];
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / DepthBufferRasterizerScalarST.cpp
+v1
+// Compute triangle area
+int triArea = (fxPtX[1] - fxPtX[0]) * (fxPtY[2] - fxPtY[0]) - (fxPtX[0] - fxPtX[2]) * (fxPtY[0] - fxPtY[1]);
+float oneOverTriArea = (1.0f/float(triArea));
+
+Z[1] = (Z[1] - Z[0]) * oneOverTriArea;
+Z[2] = (Z[2] - Z[0]) * oneOverTriArea;
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / TransformedAABBoxSSE.cpp
+v1
+__m128i sum0Row = _mm_add_epi32(aa0Col, bb0Row);
+__m128i sum1Row = _mm_add_epi32(aa1Col, bb1Row);
+__m128i sum2Row = _mm_add_epi32(aa2Col, bb2Row);
+
+__m128 zx = _mm_mul_ps(_mm_cvtepi32_ps(aa1Inc), zz[1]);
+zx = _mm_add_ps(zx, _mm_mul_ps(_mm_cvtepi32_ps(aa2Inc), zz[2]));
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / DepthBufferRasterizerSSEST.cpp
+__m128i sum0Row = _mm_add_epi32(aa0Col, bb0Row);
+__m128i sum1Row = _mm_add_epi32(aa1Col, bb1Row);
+__m128i sum2Row = _mm_add_epi32(aa2Col, bb2Row);
+
+__m128i bb0Inc = _mm_slli_epi32(bb0, 1);
+__m128i bb1Inc = _mm_slli_epi32(bb1, 1);
+If you want I can:
+
+paste the full surrounding function(s) for any of the above files, or
+point to additional locations (e.g., AABBoxRasterizer* variants) that use the same edge-function/edge-stepping pattern.
+You said: Can you give me the cl command
+Can you give me the cl command that will build all these files?
+
+using cl compiler in windows msvc
+Copilot said: Below are example cl commands you can
+Below are example cl commands you can run from a Visual Studio Developer Command Prompt to compile the source files in SoftwareOcclusionCulling and link them into an executable. I give both a 64-bit and a 32-bit version. Adjust paths, library list and defines as needed for your environment.
+
+Important notes before running
+
+Run these from the appropriate VS prompt:
+64-bit: "x64 Native Tools Command Prompt for VS"
+32-bit: "Developer Command Prompt for VS"
+The repo contains other project headers / sources (CPUT framework, etc.). You must point /I to the repo root (or any other include dirs) so the headers resolve. If the project depends on other libraries (Direct3D, CPUT, third-party libs), add their include/lib paths and link libs.
+The rasterizer uses SSE intrinsics, so use /arch:SSE2 (or /arch:AVX if you want AVX and your code supports it).
+These are example single-line commands that compile all .cpp files under SoftwareOcclusionCulling at once (wildcard). If the compile fails because of missing files/deps, you’ll need to add those files or adjust include/lib paths.
+Example — 64-bit build (run in x64 Native Tools prompt)
+
+Assumes you are at the repository root (the directory that contains SoftwareOcclusionCulling).
+Replace <REPO_ROOT> if you run it from elsewhere; replace any SDK paths or add extra /I and /LIBPATH entries as needed.
+cl /nologo /W3 /EHsc /MD /O2 /arch:SSE2 /I"." /I"C:\Path\To\Additional\Includes" SoftwareOcclusionCulling*.cpp /link /OUT:IntelOcclusionCull.exe d3d11.lib dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
+
+Example — 32-bit build (run in 32-bit Developer prompt)
+
+cl /nologo /W3 /EHsc /MD /O2 /arch:SSE2 /I"." /I"C:\Path\To\Additional\Includes" /favor:blend SoftwareOcclusionCulling*.cpp /link /OUT:IntelOcclusionCull32.exe d3d11.lib dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
+
+Flags explained
+
+/nologo : hide compiler banner
+/W3 : warning level 3 (adjust as desired)
+/EHsc : standard C++ exceptions model
+/MD : use DLL runtime (multithreaded)
+/O2 : optimize for speed
+/arch:SSE2 : enable SSE2 intrinsics (required for mm* used in the code)
+/I"." : include current repo root (so headers in the tree are found)
+SoftwareOcclusionCulling*.cpp : compile all .cpp files in that folder
+/link /OUT:... : produce the named executable and pass link libraries after it
+d3d11.lib dxgi.lib d3dcompiler.lib user32.lib gdi32.lib : common Windows / Direct3D libs — add or remove as required
+If you prefer compiling to object files first and then linking:
+
+cl /nologo /W3 /EHsc /MD /O2 /arch:SSE2 /I"." SoftwareOcclusionCulling*.cpp /c link /OUT:IntelOcclusionCull.exe *.obj d3d11.lib dxgi.lib d3dcompiler.lib user32.lib gdi32.lib
+
+Troubleshooting & next steps
+
+If headers like CPUT*.h are missing, add the include path where CPUT lives: /I"path\to\CPUT\include".
+If the project uses additional .cpp outside SoftwareOcclusionCulling, include them in the command or compile them into objects first.
+If you get unresolved externals at link time, add the corresponding .lib or compile the missing modules.
+If you want to enable AVX instead of SSE2 (and your CPU/logic supports it): use /arch:AVX (note: check intrinsics compatibility).
+If you tell me:
+
+whether you want x86 or x64,
+the repository path on your machine (or that you’re running from the repo root),
+any extra include paths (e.g. Windows SDK version, CPUT include path), I can produce an exact cl command line tuned to your environment (and a link command with specific .lib paths).
+You said: Do you know if in this repo
+Do you know if in this repo they used fixed point math? Where
+Copilot said: Short answer: Yes. The rasterizers use fixed-point
+Short answer: Yes. The rasterizers use fixed-point / integer math for X and Y (edge functions and stepping). Depth (Z) remains in float and is interpolated in floating point.
+
+Evidence (selected excerpts)
+
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / TransformedAABBoxSSE.cpp
+v2
+// use fixed-point only for X and Y.  Avoid work for Z and W.
+__m128i fxPtX[3], fxPtY[3];
+for(int m = 0; m < 3; m++)
+{
+    fxPtX[m] = _mm_cvtps_epi32(xformedPos[m].X);
+    fxPtY[m] = _mm_cvtps_epi32(xformedPos[m].Y);
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / TransformedAABBoxScalar.cpp
+v2
+// convert screen-space X/Y to integer (fixed-point)
+for(UINT j = 0; j < 3; j++)
+{
+    fxPtX[j] = (int)(xformedPos[j].x + 0.5);
+    fxPtY[j] = (int)(xformedPos[j].y + 0.5);
+    Z[j] = xformedPos[j].z;
+rygorous / intel_occlusion_cull / SoftwareOcclusionCulling / DepthBufferRasterizerScalarST.cpp
+v2
+// uses fxPtX/fxPtY and integer A/B/C; Z interpolation uses floats
+int triArea = ...;
+float oneOverTriArea = (1.0f/float(triArea));
+Z[1] = (Z[1] - Z[0]) * oneOverTriArea;
+Z[2] = (Z[2] - Z[0]) * oneOverTriArea;
+
+Summary / interpretation
+
+Fixed-point / integer arithmetic is applied to X and Y (screen-space) via:
+Converting floats to ints (scalar: rounding to int; SSE: _mm_cvtps_epi32).
+Constructing integer edge-function coefficients A, B, C from those integer coordinates.
+Evaluating edge functions at a starting pixel and stepping them across X and Y using integer additions (edge-stepping).
+Depth (Z) computations and interpolation remain in floating point (Z[] arrays are floats and interpolated with float math).
+Files showing this pattern include (but are not limited to):
+SoftwareOcclusionCulling/TransformedAABBoxSSE.cpp
+SoftwareOcclusionCulling/TransformedAABBoxScalar.cpp
+SoftwareOcclusionCulling/DepthBufferRasterizerScalarST.cpp
+SoftwareOcclusionCulling/DepthBufferRasterizerSSE*.cpp
+If you want, I can:
+
+grep the repo for all places that use fxPtX/fxPtY, _mm_cvtps_epi32 or the A/B/C pattern and return a list of files/lines, or
+show the full function(s) surrounding any of the snippets above. Which would you prefer?
+You said: ``` Vec2F32 s0 =
+```
+    Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
+    Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
+    Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    f32 area = edge(s0, s1, s2);          // signed
+
+    f32 inv_area = 1.0f / area;
+    // edge stepping basically
+    // For E(a,b,p): dE/dx = (b.y - a.y), dE/dy = -(b.x - a.x)
+    f32 e0_dx = (s2.y - s1.y);  f32 e0_dy = -(s2.x - s1.x); // E0 = edge(s1,s2,p)
+    f32 e1_dx = (s0.y - s2.y);  f32 e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
+    f32 e2_dx = (s1.y - s0.y);  f32 e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
+
+    // Evaluate at top-left of bbox (pixel center)
+    f32 start_x = (f32)min_x + 0.5f;
+    f32 start_y = (f32)min_y + 0.5f;
+    Vec2F32 p0 = { start_x, start_y };
+    f32 row_w0 = edge(s1, s2, p0);
+    f32 row_w1 = edge(s2, s0, p0);
+    f32 row_w2 = edge(s0, s1, p0);
+
+    b32 e0_inc = is_top_left(s1, s2);
+    b32 e1_inc = is_top_left(s2, s0);
+    b32 e2_inc = is_top_left(s0, s1);
+
+    u32 depth_buffer_stride = params->depth_buffer->width;
+    f32 eps = -1e-4f;
+    int lx, hx, ly, hy;
+    __m128 v_e0_dx = _mm_set1_ps(e0_dx);
+    __m128 v_e1_dx = _mm_set1_ps(e1_dx);
+    __m128 v_e2_dx = _mm_set1_ps(e2_dx);
+
+    {
+        u32 x = min_x;
+        for (u32 y = min_y; y < max_y; y++)
+        {
+            f32 base_w0 = row_w0;
+            f32 base_w1 = row_w1;
+            f32 base_w2 = row_w2;
+
+            __m128 lane = _mm_set_ps(3,2,1,0);
+            u32 simd_end = (u32)max_x & ~3u;
+            for (; x < max_x && ((u32)x & 3u) != 0; x++)
+            {
+                f32 dx = (f32)(x - min_x);
+                
+                f32 w0 = base_w0 + dx * e0_dx;
+                f32 w1 = base_w1 + dx * e1_dx;
+                f32 w2 = base_w2 + dx * e2_dx;
+
+                b32 inside =
+                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+                    (e2_inc ? w2 >= 0.f : w2 > eps);
+                if (inside)
+                {
+                    f32 b0 = w0 * inv_area;
+                    f32 b1 = w1 * inv_area;
+                    f32 b2 = w2 * inv_area;
+                    f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
+                }
+            }
+
+            for (; x + 3 < simd_end; x += 4)
+            {
+                __m128 v_dx = _mm_add_ps(_mm_set1_ps((f32)(x - min_x)), lane);
+                __m128 w0 = _mm_add_ps(_mm_set1_ps(base_w0), _mm_mul_ps(v_dx, v_e0_dx));
+                __m128 w1 = _mm_add_ps(_mm_set1_ps(base_w1), _mm_mul_ps(v_dx, v_e1_dx));
+                __m128 w2 = _mm_add_ps(_mm_set1_ps(base_w2), _mm_mul_ps(v_dx, v_e2_dx));
+
+
+                __m128 v_zero = _mm_set1_ps(0.0f);
+                __m128 v_eps = _mm_set1_ps(eps);
+                __m128 mask_e0 = e0_inc ? _mm_cmpge_ps(w0, v_zero) : _mm_cmpgt_ps(w0, v_eps);
+                __m128 mask_e1 = e1_inc ? _mm_cmpge_ps(w1, v_zero) : _mm_cmpgt_ps(w1, v_eps);
+                __m128 mask_e2 = e2_inc ? _mm_cmpge_ps(w2, v_zero) : _mm_cmpgt_ps(w2, v_eps);
+                __m128 inside = _mm_and_ps(_mm_and_ps(mask_e0, mask_e1), mask_e2);
+                b32 inside_mask = _mm_movemask_ps(inside);
+                if (inside_mask == 0) continue;
+                float w0_arr[4], w1_arr[4], w2_arr[4];
+                _mm_storeu_ps(w0_arr, w0);
+                _mm_storeu_ps(w1_arr, w1);
+                _mm_storeu_ps(w2_arr, w2);
+
+                for (int lane = 0; lane < 4; ++lane)
+                {
+                    if ((inside_mask & (1 << lane)) == 0)
+                        continue; // lane is outside triangle
+
+                    u32 px = x + (u32)lane;
+                    u32 index = y * depth_buffer_stride + px;
+
+                    f32 w0s = w0_arr[lane];
+                    f32 w1s = w1_arr[lane];
+                    f32 w2s = w2_arr[lane];
+
+                    f32 b0 = w0s * inv_area;
+                    f32 b1 = w1s * inv_area;
+                    f32 b2 = w2s * inv_area;
+
+                    f32 inv_w_interp = b0 * inv_w0 + b1 * inv_w1 + b2 * inv_w2;
+                    f32 depth_val =
+                        (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+
+                    if(depth_val < params->depth_buffer->data[index])
+                    {
+                        params->depth_buffer->data[index] = depth_val;
+
+                        Vec3 interpolated_color =
+                            vec3_add(
+                                vec3_add(
+                                    vec3_scalar(v0_color, b0),
+                                    vec3_scalar(v1_color, b1)),
+                                vec3_scalar(v2_color, b2));
+
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 color_u32 = 0;
+                        color_u32 |= (0xFFu << 24)
+                            | (((u32)final_color.x & 0xFFu) << 16)
+                            | (((u32)final_color.y & 0xFFu) << 8)
+                            | (((u32)final_color.z & 0xFFu) << 0);
+
+                        draw_pixel(params->buffer, px, y, color_u32);
+                    }
+                }
+            }
+
+            for (; x < max_x; x++)
+            {
+                f32 dx = (f32)(x - min_x);
+                
+                f32 w0 = base_w0 + dx * e0_dx;
+                f32 w1 = base_w1 + dx * e1_dx;
+                f32 w2 = base_w2 + dx * e2_dx;
+
+                b32 inside =
+                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+                    (e2_inc ? w2 >= 0.f : w2 > eps);
+                if (inside)
+                {
+                    f32 b0 = w0 * inv_area;
+                    f32 b1 = w1 * inv_area;
+                    f32 b2 = w2 * inv_area;
+                    f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    {
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+
+                        u32 interpolated_color_to_u32 = 0;
+
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
+
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
+                }
+            }
+            row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
+        }
+    }
+```
+Can you tell me if my approach to solving barycentrics with simd is similar to theirs or not at all
+Copilot said: Short answer: Your approach is conceptually the
+Short answer: Your approach is conceptually the same as theirs — both use edge functions + edge-stepping and SIMD to test 4 pixels at once and then compute barycentric weights for interpolation — but the implementations differ in numeric choice and the low-level stepping strategy.
+
+Comparison (what’s the same)
+
+Algorithm: both compute edge functions for the three triangle edges, evaluate them at a pixel-center start location, step them across X and Y, use the three edge values (w0/w1/w2 or alpha/beta/gamma) as (unnormalized) barycentric weights, and use those to interpolate depth and other attributes.
+SIMD pattern: both build a 4-lane vector of x offsets (lane = {3,2,1,0} or similar), compute vectorized edge values for 4 pixels, make a per-lane inside/outside mask with comparisons, use movemask to test lanes, then handle only the lanes that passed.
+Fill rule: both pay attention to the top-left rule (you have e?_inc = is_top_left(...) and the repo uses sign tests and mask semantics to implement raster rules / edge ties).
+Differences (where they diverge)
+
+Numeric domain for edge functions:
+Your code: uses floating-point edge functions (float e0_dx, e0_dy; base_w + dx * e_dx) and does vectorized float mul/add to get w values.
+Repo (rygorous/intel_occlusion_cull): uses fixed-point / integer edge evaluation for X/Y: it converts screen X/Y to ints (rounding or _mm_cvtps_epi32) and forms integer edge coefficients A,B,C; then alpha/beta/gamma are incremented by integer adds (A per x, B per y). Depth interpolation remains in float.
+Increment strategy inside SIMD:
+Your code recomputes w per lane via v_dx * v_e?_dx (one vector multiply per edge per SIMD block) and then extracts lanes into scalars for attribute interpolation.
+Repo keeps integer edge values and increments them additively with integer SIMD adds (no multiply per-pixel). They convert the integer barycentrics to float only when needed for depth interpolation (using _mm_cvtepi32_ps).
+Post-mask handling:
+You store the 4 float w vectors to arrays, then loop per lane and compute depth and write per-pixel.
+The repo sometimes blends/stores using SIMD ops (e.g. _mm_blendv_ps or _mm_store_ps) to update 4 depth values at once when possible.
+Pixel center computation: yours uses floor(v.x)+0.5f which matches the idea of evaluating at pixel centers; repo computes fixed-point pixel centers via cvt/rounding — functionally equivalent.
+Implications / tradeoffs
+
+Accuracy / robustness: integer fixed-point edge stepping (repo) avoids accumulating FP rounding drift for the edge tests and can be slightly more robust for tie-breaking. It also makes the inside/outside tests cheap via integer sign checks.
+Performance: repo’s approach avoids per-pixel multiplies for edge evaluation (just increments), which is frequently faster. Your approach does one vector multiply per edge per SIMD block (3 muls), which is fine on modern hardware but could be slower than purely-additive stepping in tight inner loops.
+Complexity: your float-based approach is simpler to reason about (and directly matches the continuous math). The repo’s integer-stepping is a classic rasterizer optimization that requires care for rounding/centering.
+Concrete suggestions (if you want to get closer to the repo’s style / performance)
+
+Switch edge evaluation to integer fixed-point for X/Y:
+Convert pixel centers once with rounding (or floor+0.5 -> integer), compute A/B/C as ints, evaluate start alpha/beta/gamma as ints, then use integer SIMD (_mm_add_epi32) to step. Convert to float only when computing depth interpolation (_mm_cvtepi32_ps).
+If you keep floats, reduce work per SIMD block:
+Instead of recomputing v_dx = set1(x-min_x) + lane each block, you can maintain a 4-lane vector of w values and increment it by v_e?_dx * 4 when stepping by 4 pixels (or increment by v_e?_dx per loop and use lane offsets only once). This reduces multiplications.
+Avoid storing to arrays + scalar per-lane loops:
+Try to keep depth interpolation vectorized and write masked SIMD stores (e.g. _mm_blendv_ps + _mm_storeu_ps or _mm_maskstore_ps) to update depth buffer lanes without extracting scalars. That preserves SIMD throughput.
+Keep your top-left handling and eps; the repo encodes tie rules into the integer sign test — keep whatever best matches your rendering rules.
+References (repo files showing integer edge-stepping and SIMD usage)
+
+TransformedAABBoxScalar.cpp (integer A/B/C, alpha0/beta0/gama0, per-row/per-column stepping):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/TransformedAABBoxScalar.cpp#L133-L184
+DepthBufferRasterizerScalarST.cpp (same pattern, depth interpolation in float):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/DepthBufferRasterizerScalarST.cpp#L236-L300
+TransformedAABBoxSSE.cpp (SSE integer edge stepping, convert to float for depth):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/TransformedAABBoxSSE.cpp#L278-L332
+DepthBufferRasterizerSSEST.cpp (SSE inner loops showing integer sum/incs and float depth interpolation):
+https://github.com/rygorous/intel_occlusion_cull/blob/9ab7bbf543004c3da3e8b621aecc6702327da7b3/SoftwareOcclusionCulling/DepthBufferRasterizerSSEST.cpp#L311-L365
+Conclusion
+
+High-level: yes — you and the repo are using the same algorithmic approach (edge functions + edge-stepping + SIMD).
+Low-level: your implementation is float-based per-edge using SIMD multiplies and per-lane scalar extraction, while theirs uses integer fixed-point edge stepping + integer SIMD increments and vectorized depth interpolation/updates. Both are valid; the repo’s choices are optimized for minimal per-pixel arithmetic and robustness.
+If you want, I can:
+
+show a small refactor of one of your inner loops to avoid per-lane scalar stores and keep interpolation in SIMD, or
+convert your float-based edge-stepping into integer fixed-point style (a drop-in rewrite) so it more closely matches the repo. Which would help you more?
+Ask anything
+
+

@@ -1,3 +1,5 @@
+// TODO stretchdibbits in release - debug takes around 12% of the time when running it close to a minute.
+//  Try to use dx11 for presentation to see if the time lowers
 #include "base_core.h"
 #include "base_os.h"
 #include "os_win32.h"
@@ -10,6 +12,7 @@
 
 #include "base_arena.c"
 #include "base_string.c"
+#include "winnt.h"
 
 global Arena *arena;
 
@@ -229,7 +232,10 @@ int main ()
         os_perform_hot_reload(&game_dll);
         game_dll.app_update_and_render(buffer, depth_buffer, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
-        StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
 
+        //LONGLONG stretch_now = timer_get_os_time();
+        StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
+        //LONGLONG stretch_last = timer_get_os_time();
+        //printf("StretchDIBits time: %.2fms\n", timer_os_time_to_ms(stretch_last - stretch_now));
     }
 }

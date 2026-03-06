@@ -8,8 +8,9 @@ del *.pdb > NUL 2> NUL
 set compiler=cl
 set mode=debug
 
-if "%mode%" == "debug"   set compiler_flags=-Od -Zi
-if "%mode%" == "release" set compiler_flags=-O2
+if "%mode%" == "debug"          set compiler_flags=-Od -Zi
+if "%mode%" == "release-debug"  set compiler_flags=-O2 -Zi
+if "%mode%" == "release"        set compiler_flags=-O2
 
 echo [Compiler %compiler% - %mode%]
 echo Compiling game

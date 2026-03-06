@@ -31,8 +31,7 @@
     #define SIMD 0  
 #endif
 
-
-#define PROFILE 0
+#define PROFILE 1
 #ifndef PROFILE
     #define PROFILE 0  
 #endif
@@ -50,14 +49,22 @@
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 0
 
-#define FLIPPED_Y 0
-#define BACKFACE_CULLING 0
-#ifndef BACKFACE_CULLING
-    #define BACKFACE_CULLING 0  
+#define Y_UP 1
+
+// I must also define what a backface or frontface is, is it CCW or CW?. Because in opengl you can do it.
+// glFrontFace(GL_CCW);
+#define CULL_FRONTFACE 0
+#ifndef CULL_FRONTFACE
+    #define CULL_FRONTFACE 0  
+#endif
+
+#define CULL_BACKFACE 0
+#ifndef CULL_BACKFACE
+    #define CULL_BACKFACE 0  
 #endif
 
 #define EDGE_FUNCTIONS 0
-#define OLIVEC 0
+#define OLIVEC 1
 
 #define EDGE_STEPPING 0
 #ifndef EDGE_STEPPING
@@ -555,6 +562,13 @@ static inline b32 olivec_barycentric(int x1, int y1, int x2, int y2, int x3, int
            );
 }
 
+internal f32 orient_2d(Vec2F32 a, Vec2F32 b, Vec2F32 c)
+{
+    // AB x CA
+    return ((b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)); // 
+}
+
+// i should remove this function here and just stick with orient_2d as it seems is the normal function defined for right handed coordinates
 static inline float edge(Vec2F32 a, Vec2F32 b, Vec2F32 p)
 {
     return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
@@ -576,11 +590,15 @@ static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
     #if REVERSE_DEPTH_VALUE
     memset((void*)buffer->data, 0x00, buffer->width * buffer->height * 4);
     #else
-    for(u32 i = 0; i < buffer->width * buffer->height; i++)
+    u32 size = buffer->width * buffer->height;
+    __m128 value = _mm_set1_ps(max_f32);
+
+    f32 *buffer_ptr = buffer->data;
+    for(u32 i = 0; i < size; i += 4)
     {
-        buffer->data[i] = max_f32;
+        _mm_storeu_ps(buffer_ptr + i, value);
     }
-    //memset((void*)buffer->data, 0xFF, buffer->width * buffer->height * 4);
+    //memset(buffer->data, 0x7F, size * sizeof(f32));
     #endif
 }
 
@@ -926,7 +944,7 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
     Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
     f32 area = edge(s0, s1, s2);          // signed
-    #if FLIPPED_Y
+    #if Y_UP
     if (area < 0.0f) // is CW
     {
         //Swap(v1, v2);
@@ -980,11 +998,11 @@ internal void barycentric_with_edge_stepping(Params *params)
                 if (inside)
                 {
                     #if 0
-                    #if FLIPPED_Y
-                    // this only works is flipped_y == 1
+                    #if Y_UP
+                    // this only works is Y_UP == 1
                     if (!((w0 > 0 || w1 > 0 || w2 > 0)))
                     #else
-                    // this only works is flipped_y == 0
+                    // this only works is Y_UP == 0
                     if (!((w0 < 0 || w1 < 0 || w2 < 0)))
                     #endif
                     #endif
@@ -1112,6 +1130,8 @@ UPDATE_AND_RENDER(update_and_render)
         init = 1;
 
         {
+
+
             f32 ax = 1;
             f32 ay = 2;
             f32 bx = 1;
@@ -1123,6 +1143,17 @@ UPDATE_AND_RENDER(update_and_render)
             f32 dx = 0;
             f32 dy = 0;
             printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", ax, ay, bx, by, cross_2d(ax, ay, bx, by));
+
+            Vec2F32 v0 = {1, 1};
+            Vec2F32 v1 = {3, 3};
+            Vec2F32 v2 = {4, 1};
+            printf("-- These are equivalent \n");
+            printf("hdp Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.2f\n", ax, ay, bx, by, cross_2d(v1.x - v0.x, v1.y - v0.y, v2.x - v0.x, v2.y - v0.y));
+            printf("hdp Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.2f\n", ax, ay, bx, by, orient_2d(v0, v1, v2));
+            printf("--- \n");
+            printf("hdp Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.2f\n", ax, ay, bx, by, cross_2d(v2.x - v0.x, v2.y - v0.y, v1.x - v0.x, v1.y - v0.y));
+            printf("hdp Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.2f\n", ax, ay, bx, by, orient_2d(v0, v2, v1));
+            printf("-- These are equivalent \n");
 
             ax = -5;
             ay = 4;
@@ -1166,7 +1197,8 @@ UPDATE_AND_RENDER(update_and_render)
             dy = by - py;
             printf("Signed area of: (%.2f, %.2f) x (%.2f, %.2f) = %.g\n", dx, dy, cx, cy, cross_2d(dx, dy, cx, cy));
 
-            #if FLIPPED_Y
+            #if 0
+            #if Y_UP
                 printf("Y+ goes up\n");
                 #if BACKFACE_CULLING
                     printf("Discarding triangle which area is negative\n");
@@ -1184,6 +1216,7 @@ UPDATE_AND_RENDER(update_and_render)
                     printf("Discarding triangle which area is negative\n");
                     printf("Vertices must be defined in CW order\n");
                 #endif
+            #endif
             #endif
 
         }
@@ -1581,7 +1614,7 @@ UPDATE_AND_RENDER(update_and_render)
                             v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
                             v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
                             v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-                            #if FLIPPED_Y
+                            #if Y_UP
                             v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
                             v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
                             v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
@@ -1660,17 +1693,13 @@ UPDATE_AND_RENDER(update_and_render)
                 But if I flipped them that means that now, the vertices should be interpreted 
             
             */
-                #if BACKFACE_CULLING
-                // Defined in CCW relative to ME thinking that Y+ up and X+ right
-                Vec4 v0_v4 = (Vec4) {0.0,  0.7, 10.0, 1.0f}; // red
-                Vec4 v1_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f}; // blue
-                Vec4 v2_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};  // green
-                #else
-                // Defined in CW relative to ME thinking that Y+ up and X+ right
+                // v0 -> v1 -> v2 could easily be counter or clock wise defined. We dont know that. This will depend on wether 0,0 is at the top and Y grows down
+                // or if 0, 0 is at the bot and Y grows up. When writting this comment im using Y_UP = 0 so 0,0 is at the top Y grows down. So for this case:
+                // these are defined counter clockwise. What that also means is when i call orient_2d later the signed area is going to be negative for this vertices.
+                // Why? Because of two things. First Y grows down, and in that setup, this vertices are counter clockwise
                 Vec4 v0_v4 = (Vec4) {0.0,  0.7, 50.0, 1.0f}; // red
                 Vec4 v1_v4 = (Vec4) {0.6, -0.4, 1.0, 1.0f};  // green
                 Vec4 v2_v4 = (Vec4) {-0.6, -0.4, 1.0, 1.0f}; // blue
-                #endif
             // if i get them smaller i get a much better framerate!
 
 
@@ -1711,7 +1740,7 @@ UPDATE_AND_RENDER(update_and_render)
             //  - yes it changes the sign of the area, pretty cool!
 
             // viewport mapping
-            #if FLIPPED_Y
+            #if Y_UP
 			v0_v4.x = (v0_v4.x * 0.5f + 0.5f) * buffer->width;
 			v0_v4.y = (1.0f - (v0_v4.y * 0.5f + 0.5f)) * buffer->height;
 
@@ -1795,11 +1824,11 @@ UPDATE_AND_RENDER(update_and_render)
                         #if EDGE_STEPPING
                             // if i remvoe this first condition it doesnt render anymore. So this is front-face culling
                             //if (!((w0 < 0 || w1 < 0 || w2 < 0) && (w0 > 0 || w1 > 0 || w2 > 0)))
-                            #if FLIPPED_Y
-                            // this only works is flipped_y == 1
+                            #if Y_UP
+                            // this only works is Y_UP == 1
                             if (!((w0 > 0 || w1 > 0 || w2 > 0)))
                             #else
-                            // this only works is flipped_y == 0
+                            // this only works is Y_UP == 0
                             if (!((w0 < 0 || w1 < 0 || w2 < 0)))
                             #endif
                             {
@@ -1917,27 +1946,29 @@ UPDATE_AND_RENDER(update_and_render)
                     }
                 #else
                 // NAIVE
-                    f32 area_maybe = edge((Vec2F32){v0.x, v0.y}, (Vec2F32){v1.x, v1.y}, (Vec2F32){v2.x, v2.y});
+                    f32 area_maybe = orient_2d((Vec2F32){v0.x, v0.y}, (Vec2F32){v1.x, v1.y}, (Vec2F32){v2.x, v2.y});
                     b32 skip = 0;
-                    #if FLIPPED_Y
-                        #if BACKFACE_CULLING
+                    #if Y_UP
+                        #if CULL_BACKFACE
                         if(area_maybe < 0.0f) // cw
                         {
                             skip = 1;
                         }
-                        #else
+                        #endif
+                        #if CULL_FRONTFACE
                         if(area_maybe > 0.0f) // ccw
                         {
                             skip = 1;
                         }
                         #endif
                     #else
-                        #if BACKFACE_CULLING
+                        #if CULL_BACKFACE
                         if(area_maybe > 0.0f) // cw
                         {
                             skip = 1;
                         }
-                        #else
+                        #endif
+                        #if CULL_FRONTFACE
                         if(area_maybe < 0.0f) // ccw
                         {
                             skip = 1;
