@@ -24,9 +24,10 @@
 #include "timer.c"
 #include "obj.h"
 #include <assert.h>
+#include <emmintrin.h>
 #include <immintrin.h>
 
-#define SIMD 0
+#define SIMD 1
 #ifndef SIMD
     #define SIMD 0  
 #endif
@@ -49,6 +50,7 @@
 #define PREVIOUS_MISCONCEPTIONS 1
 #define ROTATION 0
 
+// TODO fix this is not being used when loading the teapot (models)
 #define Y_UP 1
 
 // I must also define what a backface or frontface is, is it CCW or CW?. Because in opengl you can do it.
@@ -64,7 +66,7 @@
 #endif
 
 #define EDGE_FUNCTIONS 0
-#define OLIVEC 1
+#define OLIVEC 0
 
 #define EDGE_STEPPING 0
 #ifndef EDGE_STEPPING
@@ -131,6 +133,15 @@ internal inline void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u3
 #endif
 }
 
+internal inline void draw_pixel_simd(Software_Render_Buffer *buffer, u32 x, u32 y, __m128i color, __m128 pass_mask)
+{
+    u32 *pixel_ptr = buffer->data + y * buffer->width + x;
+    __m128i old_color = _mm_loadu_si128((__m128i *)pixel_ptr);
+    __m128i mask = _mm_castps_si128(pass_mask);
+    __m128i out_color = _mm_or_si128(_mm_and_si128(mask, color), _mm_andnot_si128(mask, old_color));
+    _mm_storeu_si128((__m128i *)pixel_ptr, out_color);
+}
+
 typedef struct SIMD_Vec3 SIMD_Vec3;
 struct SIMD_Vec3
 {
@@ -146,10 +157,28 @@ struct SIMD_Result
     f32 *inv_w;
 };
 
+typedef struct SIMD_Face SIMD_Face;
+struct SIMD_Face
+{
+    int *v0;
+    int *v1;
+    int *v2;
+
+    int *v0t;
+    int *v1t;
+    int *v2t;
+
+    int *v0n;
+    int *v1n;
+    int *v2n;
+};
+
 typedef struct Obj_Model_SIMD Obj_Model_SIMD;
 struct Obj_Model_SIMD
 {
     SIMD_Vec3 vertices;
+    SIMD_Face faces;
+    u32 padded_vertex_count;
 };
 global Obj_Model_SIMD model_simd;
 global SIMD_Result result;
@@ -584,7 +613,7 @@ static inline b32 is_top_left_edge(float dx, float dy)
     return (dy > 0) || (dy == 0 && dx < 0);
 }
 
-static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
+static void inline clear_depth_buffer(Software_Depth_Buffer *buffer)
 {
 
     #if REVERSE_DEPTH_VALUE
@@ -596,15 +625,22 @@ static inline clear_depth_buffer(Software_Depth_Buffer *buffer)
     f32 *buffer_ptr = buffer->data;
     for(u32 i = 0; i < size; i += 4)
     {
-        _mm_storeu_ps(buffer_ptr + i, value);
+        _mm_store_ps(buffer_ptr + i, value);
     }
     //memset(buffer->data, 0x7F, size * sizeof(f32));
     #endif
 }
 
-static inline clear_screen(Software_Render_Buffer *buffer, u32 color)
+static void inline clear_screen(Software_Render_Buffer *buffer, u32 color)
 {
-    draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, color);
+    u32 size = buffer->width * buffer->height;
+    __m128i value = _mm_set1_epi32(color);
+
+    u32 *buffer_ptr = buffer->data;
+    for(u32 i = 0; i < size; i += 4)
+    {
+        _mm_store_si128((__m128i*)(buffer_ptr + i), value);
+    }
 }
 
 typedef struct Params Params;
@@ -724,7 +760,184 @@ internal void olivec_params(Params *params)
     }
 }
 
+typedef struct Edge Edge;
+struct Edge
+{
+    __m128 one_step_x;
+    __m128 one_step_y;
+    u32 step_x_size;
+    u32 step_y_size;
+};
+
+internal __m128 edge_init(Edge *edge, Vec2F32 v0, Vec2F32 v1, Vec2F32 origin)
+{
+    __m128 result = {0};
+    edge->step_x_size = 4;
+    edge->step_y_size = 1;
+    f32 A = v0.y - v1.y;
+    f32 B = v1.x - v0.x;
+    f32 C = v1.y*v0.x - v1.x * v0.y;
+    __m128 lane_aux = _mm_set_ps(3, 2, 1, 0);
+    edge->one_step_x = _mm_set1_ps(A * 4);
+    edge->one_step_y = _mm_set1_ps(B * 1);
+    __m128 x = _mm_add_ps(_mm_set1_ps(origin.x), lane_aux);
+    __m128 y = _mm_set1_ps(origin.y);
+    result = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(A), x), _mm_mul_ps(_mm_set1_ps(B), y)), _mm_set1_ps(C));
+
+    return result;
+}
+
 internal void barycentric_with_edge_stepping_SIMD(Params *params)
+{
+    Vec3 v0 = params->v0;
+    Vec3 v1 = params->v1;
+    Vec3 v2 = params->v2;
+    Vec3 v0_color = params->v0_color;
+    Vec3 v1_color = params->v1_color;
+    Vec3 v2_color = params->v2_color;
+    f32 inv_w0 = params->inv_w0;
+    f32 inv_w1 = params->inv_w1;
+    f32 inv_w2 = params->inv_w2;
+    u32 min_x = params->min_x;
+    u32 max_x = params->max_x;
+    u32 min_y = params->min_y;
+    u32 max_y = params->max_y;
+
+    #if 1
+    Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
+    Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
+    Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    Vec2F32 p = {min_x + 0.5f, min_y + 0.5f};
+    #else
+    Vec2F32 s0 = { v0.x, v0.y};
+    Vec2F32 s1 = { v1.x, v1.y};
+    Vec2F32 s2 = { v2.x, v2.y};
+    Vec2F32 p = {min_x , min_y};
+    #endif
+
+    b32 e0_inc = is_top_left(s1, s2); // w0 edge
+    b32 e1_inc = is_top_left(s2, s0); // w1 edge
+    b32 e2_inc = is_top_left(s0, s1); // w2 edge
+    f32 eps = 1e-4f;
+    __m128 v_eps  = _mm_set1_ps(eps);
+    __m128i lane_i      = _mm_setr_epi32(0, 1, 2, 3);
+    __m128i v_max_xorig = _mm_set1_epi32((int)max_x);
+
+    f32 area = orient_2d(s0, s1, s2);          // signed
+    f32 inv_area = 1.0f / area;
+
+    Edge e12 = {0};
+    Edge e20 = {0};
+    Edge e01 = {0};
+    __m128 row_w0 = edge_init(&e12, s1, s2, p);
+    __m128 row_w1 = edge_init(&e20, s2, s0, p);
+    __m128 row_w2 = edge_init(&e01, s0, s1, p);
+
+    u32 depth_buffer_stride = params->depth_buffer->width;
+    __m128 v_zero = _mm_set1_ps(0.0f);
+    __m128 v_inv_area = _mm_set1_ps(inv_area);
+    __m128 v_inv_w0 = _mm_set1_ps(inv_w0);
+    __m128 v_inv_w1 = _mm_set1_ps(inv_w1);
+    __m128 v_inv_w2 = _mm_set1_ps(inv_w2);
+    __m128 v_v0z = _mm_set1_ps(v0.z);
+    __m128 v_v1z = _mm_set1_ps(v1.z);
+    __m128 v_v2z = _mm_set1_ps(v2.z);
+    __m128 v_v0cx = _mm_set1_ps(v0_color.x);
+    __m128 v_v1cx = _mm_set1_ps(v1_color.x);
+    __m128 v_v2cx = _mm_set1_ps(v2_color.x);
+    __m128 v_v0cy = _mm_set1_ps(v0_color.y);
+    __m128 v_v1cy = _mm_set1_ps(v1_color.y);
+    __m128 v_v2cy = _mm_set1_ps(v2_color.y);
+    __m128 v_v0cz = _mm_set1_ps(v0_color.z);
+    __m128 v_v1cz = _mm_set1_ps(v1_color.z);
+    __m128 v_v2cz = _mm_set1_ps(v2_color.z);
+    {
+        for (u32 y = min_y; y < max_y; y++)
+        {
+            __m128 w0 = row_w0;
+            __m128 w1 = row_w1;
+            __m128 w2 = row_w2;
+
+            for (u32 x = min_x; x < max_x; x += 4)
+            {
+                #if 0
+                __m128 sign_or = _mm_or_ps(_mm_or_ps(w0, w1), w2);
+                __m128 inside = _mm_cmpge_ps(sign_or, v_zero);
+                #else
+
+                __m128 mask_e0 = e0_inc ? _mm_cmple_ps(w0, v_zero) : _mm_cmplt_ps(w0, v_eps);
+                __m128 mask_e1 = e1_inc ? _mm_cmple_ps(w1, v_zero) : _mm_cmplt_ps(w1, v_eps);
+                __m128 mask_e2 = e2_inc ? _mm_cmple_ps(w2, v_zero) : _mm_cmplt_ps(w2, v_eps);
+                __m128 inside  = _mm_and_ps(_mm_and_ps(mask_e0, mask_e1), mask_e2);
+                __m128i px_i    = _mm_add_epi32(_mm_set1_epi32((int)x), lane_i);
+                __m128i valid_i = _mm_cmplt_epi32(px_i, v_max_xorig);
+                inside = _mm_and_ps(inside, _mm_castsi128_ps(valid_i));
+                #endif
+                if (_mm_movemask_ps(inside))
+                {
+                    __m128 b0 = _mm_mul_ps(w0, v_inv_area);
+                    __m128 b1 = _mm_mul_ps(w1, v_inv_area);
+                    __m128 b2 = _mm_mul_ps(w2, v_inv_area);
+
+                    __m128 inv_w_interp = _mm_add_ps(
+                        _mm_add_ps(_mm_mul_ps(b0, v_inv_w0), _mm_mul_ps(b1, v_inv_w1)),
+                        _mm_mul_ps(b2, v_inv_w2));
+
+                    __m128 depth_num = _mm_add_ps(
+                        _mm_add_ps(_mm_mul_ps(b0, v_v0z), _mm_mul_ps(b1, v_v1z)),
+                        _mm_mul_ps(b2, v_v2z));
+                    __m128 depth_val = _mm_div_ps(depth_num, inv_w_interp);
+
+                    u32 index_base = y * depth_buffer_stride + x;
+                    f32 *depth_ptr = params->depth_buffer->data + index_base;
+                    __m128 depth_old = _mm_loadu_ps(depth_ptr);
+                    __m128 depth_pass = _mm_cmplt_ps(depth_val, depth_old);
+                    __m128 pass = _mm_and_ps(inside, depth_pass);
+                    int pass_mask = _mm_movemask_ps(pass);
+                    if (pass_mask)
+                    {
+                        __m128 depth_new = _mm_or_ps(_mm_and_ps(pass, depth_val), _mm_andnot_ps(pass, depth_old));
+                        _mm_storeu_ps(depth_ptr, depth_new);
+
+                        __m128 color_r = _mm_div_ps(
+                            _mm_add_ps(
+                                _mm_add_ps(_mm_mul_ps(b0, v_v0cx), _mm_mul_ps(b1, v_v1cx)),
+                                _mm_mul_ps(b2, v_v2cx)),
+                            inv_w_interp);
+                        __m128 color_g = _mm_div_ps(
+                            _mm_add_ps(
+                                _mm_add_ps(_mm_mul_ps(b0, v_v0cy), _mm_mul_ps(b1, v_v1cy)),
+                                _mm_mul_ps(b2, v_v2cy)),
+                            inv_w_interp);
+                        __m128 color_b = _mm_div_ps(
+                            _mm_add_ps(
+                                _mm_add_ps(_mm_mul_ps(b0, v_v0cz), _mm_mul_ps(b1, v_v1cz)),
+                                _mm_mul_ps(b2, v_v2cz)),
+                            inv_w_interp);
+
+                        __m128i r_i = _mm_and_si128(_mm_cvttps_epi32(color_r), _mm_set1_epi32(0xFF));
+                        __m128i g_i = _mm_and_si128(_mm_cvttps_epi32(color_g), _mm_set1_epi32(0xFF));
+                        __m128i b_i = _mm_and_si128(_mm_cvttps_epi32(color_b), _mm_set1_epi32(0xFF));
+
+                        __m128i packed_color = _mm_or_si128(
+                            _mm_or_si128(_mm_set1_epi32(0xFF000000u), _mm_slli_epi32(r_i, 16)),
+                            _mm_or_si128(_mm_slli_epi32(g_i, 8), b_i));
+
+                        draw_pixel_simd(params->buffer, x, y, packed_color, pass);
+                    }
+                }
+                w0 = _mm_add_ps(w0, e12.one_step_x);
+                w1 = _mm_add_ps(w1, e20.one_step_x);
+                w2 = _mm_add_ps(w2, e01.one_step_x);
+            }
+            row_w0 = _mm_add_ps(row_w0, e12.one_step_y);
+            row_w1 = _mm_add_ps(row_w1, e20.one_step_y);
+            row_w2 = _mm_add_ps(row_w2, e01.one_step_y); 
+        }
+    }
+}
+
+internal void barycentric_with_edge_stepping_SIMD2(Params *params)
 {
     Vec3 v0 = params->v0;
     Vec3 v1 = params->v1;
@@ -783,6 +996,7 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
             f32 base_w2 = row_w2;
 
             u32 simd_end = max_x & ~3u;
+            #if 0
             for (; x < max_x && (x & 3u) != 0; x++)
             {
                 f32 dx = (f32)(x - min_x);
@@ -819,7 +1033,10 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                     }
                 }
             }
+            #endif
 
+            
+            #if 1
             for (; x + 3 < max_x; x += 4)
             {
                 __m128 v_dx = _mm_add_ps(_mm_set1_ps((f32)(x - min_x)), lane);
@@ -882,7 +1099,9 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                     }
                 }
             }
+            #endif
 
+            #if 0
             for (; x < max_x; x++)
             {
                 f32 dx = (f32)(x - min_x);
@@ -919,6 +1138,7 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                     }
                 }
             }
+            #endif
             row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
         }
     }
@@ -1042,17 +1262,13 @@ internal void barycentric_with_edge_stepping(Params *params)
 internal Obj_Model_SIMD obj_to_simd(Obj_Model model)
 {
     Obj_Model_SIMD result = {0};
-    u32 count = model.vertex_count;
-    if (model.vertex_count % 4 != 0)
-    {
-        count = (u32)roundf((f32)model.vertex_count / 4.0f) * 4.0f;
-        printf("Rounding %d to %d\n", model.vertex_count, count);
-    }
+    u32 count = model.vertex_count & ~3u;
+    result.padded_vertex_count = count;
 
-    result.vertices.x = (f32*) malloc(sizeof(f32) * (count));
-    result.vertices.y = (f32*) malloc(sizeof(f32) * (count));
-    result.vertices.z = (f32*) malloc(sizeof(f32) * (count));
-    for(u32 vertex_index = 0; vertex_index < model.vertex_count; vertex_index++)
+    result.vertices.x = (f32*) malloc(sizeof(f32) * count);
+    result.vertices.y = (f32*) malloc(sizeof(f32) * count);
+    result.vertices.z = (f32*) malloc(sizeof(f32) * count);
+    for(u32 vertex_index = 0; vertex_index < count; vertex_index++)
     {
         Vec3 model_vertex = model.vertices[vertex_index];
         result.vertices.x[vertex_index] = model_vertex.x;
@@ -1123,10 +1339,10 @@ UPDATE_AND_RENDER(update_and_render)
         model_simd = obj_to_simd(model_teapot);
 
         result.screen_space_vertices = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
-        result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
-        result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
-        result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
-        result.inv_w = (f32*)malloc(sizeof(f32) * (model_teapot.vertex_count));
+        result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
+        result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
+        result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
+        result.inv_w = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
         init = 1;
 
         {
@@ -1363,10 +1579,10 @@ UPDATE_AND_RENDER(update_and_render)
             Obj_Model *model = e->model;
             if(model->is_valid)
             {
-                if (model->vertex_count % 4 != 0)
-                {
-                    continue;
-                }
+                //if (model->vertex_count % 4 != 0)
+                //{
+                //    continue;
+                //}
                 f32 s = 0.4f;
                 __m128 scalar = _mm_load_ps1(&s);
 
@@ -1374,8 +1590,10 @@ UPDATE_AND_RENDER(update_and_render)
                 __m128 y_translation = _mm_set1_ps(e->position.y);
                 __m128 z_translation = _mm_set1_ps(e->position.z);
 
-                for(u32 vertex_index = 0; vertex_index < model->vertex_count; vertex_index+=4)
+                u32* indices = (u32*) malloc(sizeof(u32) * model_simd.padded_vertex_count);
+                for(u32 vertex_index = 0; vertex_index < model_simd.padded_vertex_count; vertex_index+=4)
                 {
+                    //BeginTime("vertex transformation", 0);
                     f32 *x_prime = &model_simd.vertices.x[vertex_index];
                     f32 *y_prime = &model_simd.vertices.y[vertex_index];
                     f32 *z_prime = &model_simd.vertices.z[vertex_index];
@@ -1445,11 +1663,69 @@ UPDATE_AND_RENDER(update_and_render)
                 }
 
 
-                for(int face_index = 0; face_index < model->face_count; face_index++)
+                for(int face_index = 0; face_index < model->face_count; face_index += 4)
                 {
-                    BeginTime("rendering models", 0);
                     {
+
+                        #if 0
+                        SIMD_Face simd_face = model_simd.faces;
+                        u32 f0 = face_index + 0;
+                        u32 f1 = face_index + 1;
+                        u32 f2 = face_index + 2;
+                        u32 f3 = face_index + 3;
+
+
+
+                        __m128 v0x = _mm_setr_ps(
+                            result.screen_space_vertices->x[simd_face.v0[f0]],
+                            result.screen_space_vertices->x[simd_face.v0[f1]],
+                            result.screen_space_vertices->x[simd_face.v0[f2]],
+                            result.screen_space_vertices->x[simd_face.v0[f3]]);
+                        __m128 v1x = _mm_setr_ps(
+                            result.screen_space_vertices->x[simd_face.v1[f0]],
+                            result.screen_space_vertices->x[simd_face.v1[f1]],
+                            result.screen_space_vertices->x[simd_face.v1[f2]],
+                            result.screen_space_vertices->x[simd_face.v1[f3]]);
+                        __m128 v2x = _mm_setr_ps(
+                            result.screen_space_vertices->x[simd_face.v2[f0]],
+                            result.screen_space_vertices->x[simd_face.v2[f1]],
+                            result.screen_space_vertices->x[simd_face.v2[f2]],
+                            result.screen_space_vertices->x[simd_face.v2[f3]]);
+                        __m128 v0y = _mm_setr_ps(
+                            result.screen_space_vertices->y[simd_face.v0[f0]],
+                            result.screen_space_vertices->y[simd_face.v0[f1]],
+                            result.screen_space_vertices->y[simd_face.v0[f2]],
+                            result.screen_space_vertices->y[simd_face.v0[f3]]);
+                        __m128 v1y = _mm_setr_ps(
+                            result.screen_space_vertices->y[simd_face.v1[f0]],
+                            result.screen_space_vertices->y[simd_face.v1[f1]],
+                            result.screen_space_vertices->y[simd_face.v1[f2]],
+                            result.screen_space_vertices->y[simd_face.v1[f3]]);
+                        __m128 v2y = _mm_setr_ps(
+                            result.screen_space_vertices->y[simd_face.v2[f0]],
+                            result.screen_space_vertices->y[simd_face.v2[f1]],
+                            result.screen_space_vertices->y[simd_face.v2[f2]],
+                            result.screen_space_vertices->y[simd_face.v2[f3]]);
+
+                        __m128 inv_w0 = _mm_setr_ps(
+                            result.inv_w[simd_face.v0[f0]],
+                            result.inv_w[simd_face.v0[f1]],
+                            result.inv_w[simd_face.v0[f2]],
+                            result.inv_w[simd_face.v0[f3]]);
+                        __m128 inv_w1 = _mm_setr_ps(
+                            result.inv_w[simd_face.v1[f0]],
+                            result.inv_w[simd_face.v1[f1]],
+                            result.inv_w[simd_face.v1[f2]],
+                            result.inv_w[simd_face.v1[f3]]);
+                        __m128 inv_w2 = _mm_setr_ps(
+                            result.inv_w[simd_face.v2[f0]],
+                            result.inv_w[simd_face.v2[f1]],
+                            result.inv_w[simd_face.v2[f2]],
+                            result.inv_w[simd_face.v2[f3]]);
+
+                        #else
                         Face face = model->faces[face_index];
+
                         Vec3 v0 = (Vec3) {result.screen_space_vertices->x[face.v[0] - 1], result.screen_space_vertices->y[face.v[0] - 1], result.screen_space_vertices->z[face.v[0] - 1]};
                         Vec3 v1 = (Vec3) {result.screen_space_vertices->x[face.v[1] - 1], result.screen_space_vertices->y[face.v[1] - 1], result.screen_space_vertices->z[face.v[1] - 1]};
                         Vec3 v2 = (Vec3) {result.screen_space_vertices->x[face.v[2] - 1], result.screen_space_vertices->y[face.v[2] - 1], result.screen_space_vertices->z[face.v[2] - 1]};
@@ -1483,9 +1759,13 @@ UPDATE_AND_RENDER(update_and_render)
 
 						params.buffer = buffer;
 						params.depth_buffer = depth_buffer;
-                        barycentric_with_edge_stepping_SIMD(&params);
+
+                        {
+                            //BeginTime("barycentric calculation", 0);
+                            barycentric_with_edge_stepping_SIMD(&params);
+                        }
+                        #endif
                     }
-                    EndTime();
                 }
             }
         }
@@ -2019,7 +2299,7 @@ UPDATE_AND_RENDER(update_and_render)
     #endif
     EndTime();
 #if PROFILE
-    for (u32 i = 0; i < 20; i++)
+    for (u32 i = 0; i < 100; i++)
     {
         if (anchors[i].result == 0) continue;
         printf("[%s] hit per frame: %d, time total per frame: %.5fms  time avg per frame: %.5fms\n", anchors[i].name, anchors[i].count, timer_os_time_to_ms(anchors[i].result), timer_os_time_to_ms(anchors[i].result) / anchors[i].count);
