@@ -6,7 +6,7 @@ pushd build
 del *.pdb > NUL 2> NUL
 
 set compiler=cl
-set mode=debug
+set mode=release
 
 if "%mode%" == "debug"          set compiler_flags=-Od -Zi
 if "%mode%" == "release-debug"  set compiler_flags=-O2 -Zi

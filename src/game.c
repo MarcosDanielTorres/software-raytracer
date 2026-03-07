@@ -834,6 +834,7 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
     __m128 row_w2 = edge_init(&e01, s0, s1, p);
 
     u32 depth_buffer_stride = params->depth_buffer->width;
+    __m128 v_one = _mm_set1_ps(1.0f);
     __m128 v_zero = _mm_set1_ps(0.0f);
     __m128 v_inv_area = _mm_set1_ps(inv_area);
     __m128 v_inv_w0 = _mm_set1_ps(inv_w0);
@@ -851,12 +852,27 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
     __m128 v_v0cz = _mm_set1_ps(v0_color.z);
     __m128 v_v1cz = _mm_set1_ps(v1_color.z);
     __m128 v_v2cz = _mm_set1_ps(v2_color.z);
+
+
+    // new ones
+    __m128 zz_1 = _mm_mul_ps(_mm_sub_ps(v_v1z, v_v0z), v_inv_area);
+    __m128 zz_2 = _mm_mul_ps(_mm_sub_ps(v_v2z, v_v0z), v_inv_area);
+
+    __m128 ww_1 = _mm_mul_ps(_mm_sub_ps(v_inv_w1, v_inv_w0), v_inv_area);
+    __m128 ww_2 = _mm_mul_ps(_mm_sub_ps(v_inv_w2, v_inv_w0), v_inv_area);
+
+    __m128 ccx_1 = _mm_mul_ps(_mm_sub_ps(v_v1cx, v_v0cx), v_inv_area); 
+    __m128 ccx_2 =  _mm_mul_ps(_mm_sub_ps(v_v2cx, v_v0cx), v_inv_area);
+    __m128 ccy_1 = _mm_mul_ps(_mm_sub_ps(v_v1cy, v_v0cy), v_inv_area); 
+    __m128 ccy_2 =  _mm_mul_ps(_mm_sub_ps(v_v2cy, v_v0cy), v_inv_area);
+    __m128 ccz_1 = _mm_mul_ps(_mm_sub_ps(v_v1cz, v_v0cz), v_inv_area); 
+    __m128 ccz_2 =  _mm_mul_ps(_mm_sub_ps(v_v2cz, v_v0cz), v_inv_area);
     {
         for (u32 y = min_y; y < max_y; y++)
         {
-            __m128 w0 = row_w0;
-            __m128 w1 = row_w1;
-            __m128 w2 = row_w2;
+            __m128 alpha = row_w0;
+            __m128 beta = row_w1;
+            __m128 gamma = row_w2;
 
             for (u32 x = min_x; x < max_x; x += 4)
             {
@@ -865,9 +881,9 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                 __m128 inside = _mm_cmpge_ps(sign_or, v_zero);
                 #else
 
-                __m128 mask_e0 = e0_inc ? _mm_cmple_ps(w0, v_zero) : _mm_cmplt_ps(w0, v_eps);
-                __m128 mask_e1 = e1_inc ? _mm_cmple_ps(w1, v_zero) : _mm_cmplt_ps(w1, v_eps);
-                __m128 mask_e2 = e2_inc ? _mm_cmple_ps(w2, v_zero) : _mm_cmplt_ps(w2, v_eps);
+                __m128 mask_e0 = e0_inc ? _mm_cmple_ps(alpha, v_zero) : _mm_cmplt_ps(alpha, v_eps);
+                __m128 mask_e1 = e1_inc ? _mm_cmple_ps(beta, v_zero) : _mm_cmplt_ps(beta, v_eps);
+                __m128 mask_e2 = e2_inc ? _mm_cmple_ps(gamma, v_zero) : _mm_cmplt_ps(gamma, v_eps);
                 __m128 inside  = _mm_and_ps(_mm_and_ps(mask_e0, mask_e1), mask_e2);
                 __m128i px_i    = _mm_add_epi32(_mm_set1_epi32((int)x), lane_i);
                 __m128i valid_i = _mm_cmplt_epi32(px_i, v_max_xorig);
@@ -875,18 +891,21 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                 #endif
                 if (_mm_movemask_ps(inside))
                 {
-                    __m128 b0 = _mm_mul_ps(w0, v_inv_area);
-                    __m128 b1 = _mm_mul_ps(w1, v_inv_area);
-                    __m128 b2 = _mm_mul_ps(w2, v_inv_area);
+                    #if 0
+                    __m128 b0 = _mm_mul_ps(alpha, v_inv_area);
+                    __m128 b1 = _mm_mul_ps(beta, v_inv_area);
+                    __m128 b2 = _mm_mul_ps(gamma, v_inv_area);
 
                     __m128 inv_w_interp = _mm_add_ps(
                         _mm_add_ps(_mm_mul_ps(b0, v_inv_w0), _mm_mul_ps(b1, v_inv_w1)),
                         _mm_mul_ps(b2, v_inv_w2));
 
-                    __m128 depth_num = _mm_add_ps(
+                    __m128 depth_val = _mm_add_ps(
                         _mm_add_ps(_mm_mul_ps(b0, v_v0z), _mm_mul_ps(b1, v_v1z)),
                         _mm_mul_ps(b2, v_v2z));
-                    __m128 depth_val = _mm_div_ps(depth_num, inv_w_interp);
+                    
+                    // not sure about this division, lets ignore it for now
+                    // __m128 depth_val = _mm_div_ps(depth_val, inv_w_interp);
 
                     u32 index_base = y * depth_buffer_stride + x;
                     f32 *depth_ptr = params->depth_buffer->data + index_base;
@@ -925,10 +944,52 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
 
                         draw_pixel_simd(params->buffer, x, y, packed_color, pass);
                     }
+                    #else
+                    __m128 inv_w_interp = _mm_add_ps(
+                        _mm_add_ps(v_inv_w0, 
+                        _mm_mul_ps(beta, ww_1)),
+                        _mm_mul_ps(gamma, ww_2));
+
+                    __m128 w_interp = _mm_div_ps(v_one, inv_w_interp);
+
+                    __m128 depth_val = _mm_add_ps(_mm_add_ps(v_v0z,
+                         _mm_mul_ps(beta, zz_1)), 
+                        _mm_mul_ps(gamma, zz_2));
+                    
+                    // not sure about this division, lets ignore it for now
+                    // __m128 depth_val = _mm_div_ps(depth_val, inv_w_interp);
+
+                    u32 index_base = y * depth_buffer_stride + x;
+                    f32 *depth_ptr = params->depth_buffer->data + index_base;
+                    __m128 depth_old = _mm_loadu_ps(depth_ptr);
+                    __m128 depth_pass = _mm_cmplt_ps(depth_val, depth_old);
+                    __m128 pass = _mm_and_ps(inside, depth_pass);
+                    int pass_mask = _mm_movemask_ps(pass);
+                    if (pass_mask)
+                    {
+                        __m128 depth_new = _mm_or_ps(_mm_and_ps(pass, depth_val), _mm_andnot_ps(pass, depth_old));
+                        _mm_storeu_ps(depth_ptr, depth_new);
+
+                        __m128 color_r = _mm_mul_ps(_mm_add_ps(_mm_add_ps(v_v0cx, _mm_mul_ps(beta, ccx_1)), _mm_mul_ps(gamma, ccx_2)), w_interp);
+                        __m128 color_g = _mm_mul_ps(_mm_add_ps(_mm_add_ps(v_v0cy, _mm_mul_ps(beta, ccy_1)), _mm_mul_ps(gamma, ccy_2)), w_interp);
+                        __m128 color_b = _mm_mul_ps(_mm_add_ps(_mm_add_ps(v_v0cz, _mm_mul_ps(beta, ccz_1)), _mm_mul_ps(gamma, ccz_2)), w_interp);
+
+                        __m128i r_i = _mm_and_si128(_mm_cvttps_epi32(color_r), _mm_set1_epi32(0xFF));
+                        __m128i g_i = _mm_and_si128(_mm_cvttps_epi32(color_g), _mm_set1_epi32(0xFF));
+                        __m128i b_i = _mm_and_si128(_mm_cvttps_epi32(color_b), _mm_set1_epi32(0xFF));
+
+                        __m128i packed_color = _mm_or_si128(
+                            _mm_or_si128(_mm_set1_epi32(0xFF000000u), _mm_slli_epi32(r_i, 16)),
+                            _mm_or_si128(_mm_slli_epi32(g_i, 8), b_i));
+
+                        draw_pixel_simd(params->buffer, x, y, packed_color, pass);
+                    }
+
+                    #endif
                 }
-                w0 = _mm_add_ps(w0, e12.one_step_x);
-                w1 = _mm_add_ps(w1, e20.one_step_x);
-                w2 = _mm_add_ps(w2, e01.one_step_x);
+                alpha = _mm_add_ps(alpha, e12.one_step_x);
+                beta = _mm_add_ps(beta, e20.one_step_x);
+                gamma = _mm_add_ps(gamma, e01.one_step_x);
             }
             row_w0 = _mm_add_ps(row_w0, e12.one_step_y);
             row_w1 = _mm_add_ps(row_w1, e20.one_step_y);
@@ -1663,7 +1724,7 @@ UPDATE_AND_RENDER(update_and_render)
                 }
 
 
-                for(int face_index = 0; face_index < model->face_count; face_index += 4)
+                for(int face_index = 0; face_index < model->face_count; face_index++)
                 {
                     {
 
