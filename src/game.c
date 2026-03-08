@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <emmintrin.h>
 #include <immintrin.h>
+#include <xmmintrin.h>
 
 #define SIMD 1
 #ifndef SIMD
@@ -48,7 +49,7 @@
 #endif
 
 #define PREVIOUS_MISCONCEPTIONS 1
-#define ROTATION 0
+#define ROTATION 1
 
 // TODO fix this is not being used when loading the teapot (models)
 #define Y_UP 1
@@ -957,7 +958,7 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
                         _mm_mul_ps(gamma, zz_2));
                     
                     // not sure about this division, lets ignore it for now
-                    // __m128 depth_val = _mm_div_ps(depth_val, inv_w_interp);
+                    //depth_val = _mm_div_ps(depth_val, inv_w_interp);
 
                     u32 index_base = y * depth_buffer_stride + x;
                     f32 *depth_ptr = params->depth_buffer->data + index_base;
@@ -1340,6 +1341,238 @@ internal Obj_Model_SIMD obj_to_simd(Obj_Model model)
     return result;
 }
 
+typedef struct TestPackerResult TestPackerResult;
+struct TestPackerResult
+{
+    u8* data;
+    size_t size;
+    u32 width;
+    u32 height;
+};
+
+internal TestPackerResult
+test_packer(FontInfo *font_info)
+{
+    //zones[0].start = aim_timer_get_os_time();
+    //zones[0].hit_count++;
+    TestPackerResult result = {0};
+    u32 result_width;
+    u32 result_height;
+    u32 result_size;
+    u8* result_data;
+
+    OS_FileReadResult font_file;
+    {
+        //zones[1].start = aim_timer_get_os_time();
+        //zones[1].hit_count++;
+        // TODO remove arena from here!
+        font_file = os_file_read(arena, "C:\\Windows\\Fonts\\CascadiaMono.ttf");
+        //zones[1].total_time = aim_timer_get_os_time() - zones[1].start;
+    }
+    FT_Face face = {0};
+    if(font_file.data)
+    {
+        FT_Open_Args args = {0};
+        args.flags = FT_OPEN_MEMORY;
+        args.memory_base = (u8*) font_file.data;
+        args.memory_size = font_file.size;
+
+        FT_Error opened_face = FT_Open_Face(library, &args, 0, &face);
+        if (opened_face) 
+        {
+            const char* err_str = FT_Error_String(opened_face);
+            printf("FT_Open_Face: %s\n", err_str);
+            exit(1);
+        }
+
+
+        FT_Error set_char_size_err = FT_Set_Char_Size(face, 4 * 64, 4 * 64, 300, 300);
+        // NOTE If `glyph_count` is not even everything goes to hell!!!
+        // TODO fix this  hahah wtf is going on!?!?!?
+        u32 glyph_count = (u32)('~') - (u32)('!') + 1;
+        u32 glyphs_per_row = round(sqrtf(glyph_count));
+        glyphs_per_row = 14;
+        //glyph_count = 8;
+        printf("Glyph count: %d\n", glyph_count);
+        printf("Glyphs per row: %d\n", glyphs_per_row);
+        u32 max_height_per_cell = face->size->metrics.height >> 6;
+        u32 max_width_per_cell = face->size->metrics.max_advance >> 6;
+
+        //u32 atlas_width = max_width_per_cell * 2;
+        //u32 atlas_height = max_height_per_cell * 2;
+
+        u32 texture_atlas_rows = round(glyph_count / glyphs_per_row);
+        u32 margin_per_glyph = 2;
+        u32 texture_atlas_left_padding = 2;
+
+        result_width = (max_width_per_cell + margin_per_glyph + texture_atlas_left_padding)  * (glyphs_per_row + 3);
+        result_height = max_height_per_cell * (texture_atlas_rows + 3);
+        result_size = result_width * result_height;
+        // TODO remove arena from here!
+        result_data = (u8*) arena_push_size(arena, u8, result_size); // space for 4 glyphs
+
+        #if 0
+        u32 char_code = 0;
+        u32 min_index = UINT32_MAX;
+        u32 max_index = 0;
+        for(;;) 
+        {
+            u32 glyph_index = 0;
+            char_code = FT_Get_Next_Char(face, char_code, &glyph_index);
+            if (char_code == 0) 
+            {
+                break;
+            }
+            // here each char_code corresponds to ascii representantion. Also the glyph index is the same as if I did:
+            // `FT_Get_Char_Index(face, 'A');`. So A would be: (65, 36)
+            //printf("(%d, %d)\n", char_code, glyph_index);
+            min_index = Min(min_index, glyph_index);
+            max_index = Max(max_index, glyph_index);
+
+        }
+        printf("min and max indexes: (%d, %d)\n", min_index, max_index);
+        #endif
+
+        u32 prev_h = 0;
+        u32 glyph_start_x = texture_atlas_left_padding;
+        u32 glyph_start_y = 0;
+        u32 count = 0;
+        //for(u32 glyph_index = min_index; glyph_index <= max_index; glyph_index++) 
+        for(u32 codepoint = '!'; codepoint <= '~'; codepoint++) 
+        {
+
+            if((count % (glyphs_per_row + 1)) == 0)
+            {
+                glyph_start_x = texture_atlas_left_padding;
+                glyph_start_y += max_height_per_cell;
+                count = 0;
+            }
+            u32 glyph_index = FT_Get_Char_Index(face, (u8)(codepoint));
+
+            if (glyph_index)
+            {
+                FT_Error load_glyph_err = FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT);
+                if (load_glyph_err) 
+                {
+                    const char* err_str = FT_Error_String(load_glyph_err);
+                    printf("FT_Load_Glyph: %s\n", err_str);
+                }
+
+                FT_Error render_glyph_err = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL);
+                if (render_glyph_err) 
+                {
+                    const char* err_str = FT_Error_String(render_glyph_err);
+                    printf("FT_Load_Glyph: %s\n", err_str);
+                }
+
+                u8 *pixel = result_data + glyph_start_x + glyph_start_y * (result_width);
+
+                u8 *ptr_uv3 = pixel;
+                u8 *ptr_uv0 = pixel + (face->glyph->bitmap.rows - 1) * result_width;
+                u8 *ptr_uv1 = pixel + face->glyph->bitmap.width - 1 + (face->glyph->bitmap.rows - 1) * result_width;
+                u8 *ptr_uv2 = pixel + face->glyph->bitmap.width - 1;
+
+                u8 *src_buffer = face->glyph->bitmap.buffer;
+                u32 y_offset = glyph_start_y;
+                for(u32 y = 0; y < face->glyph->bitmap.rows; y++)
+                {
+                    for(u32 x = 0; x < face->glyph->bitmap.width; x++)
+                    {
+                        *pixel++ = *src_buffer++;
+                    }
+
+                    y_offset += 1;
+                    pixel = result_data + glyph_start_x + y_offset * (result_width);
+                }
+                prev_h = face->glyph->bitmap.rows;
+
+                /*
+                glm::vec2 a_uv0 = glm::vec2(0.0084, 0.2256);
+                glm::vec2 a_uv1 = glm::vec2(0.0462, 0.2256);
+                glm::vec2 a_uv3 = glm::vec2(0.0084, 0.1429);
+                glm::vec2 a_uv2 = glm::vec2(0.0462, 0.1429);
+                I know the total width
+                I know the total height
+                v0 = 
+                */
+
+                // for debug!!!
+                #if 0
+                *ptr_uv3 = 0xFF;
+                *ptr_uv2 = 0xFF;
+                *ptr_uv1 = 0xFF;
+                *ptr_uv0 = 0xFF;
+                #endif
+
+
+                // this one seemed promising but only works for the height and also.. i thought 
+                // this would have calclated thi value for width... so yeah
+                // f32(uv3 - texture_atlas_start) / f32((max_width_per_cell + margin_per_glyph + texture_atlas_left_padding)  * (glyphs_per_row + 3))
+
+
+                u32 start_x = glyph_start_x;
+                int x0 = glyph_start_x;
+				int x1 = glyph_start_x + face->glyph->bitmap.width ;
+				int y0 = glyph_start_y;
+				int y1 = glyph_start_y + face->glyph->bitmap.rows ;
+
+				f32 u0 = (f32)(x0) / (f32)(result_width);
+				f32 v0 = (f32)(y0) / (f32)(result_height);
+
+				f32 u1 = (f32)(x1) / (f32)(result_width);
+				f32 v1 = (f32)(y1) / (f32)(result_height);
+
+                //f32 f_uv3_x = start_x / f32(result_width);
+                //f32 f_uv3_x = f32((uv3 - result_data) % result_width) / f32(result_width);
+                //f32 f_uv3_y = (uv3 - result_data) / result_width / f32(result_height);
+                f32 f_uv3_x = u0;
+                f32 f_uv3_y = v0;
+
+                //f32 f_uv2_x = start_x / f32(result_width);
+                //f32 f_uv2_x = f32((uv2 - result_data) % result_width) / f32(result_width);
+                //f32 f_uv2_y = (uv2 - result_data) / result_width / f32(result_height);
+                f32 f_uv2_x = u1;
+                f32 f_uv2_y = v0;
+
+                //f32 f_uv1_x = start_x / f32(result_width) + (face->glyph->bitmap.width) / f32(result_width);
+                //f32 f_uv1_x = f32((uv1 - result_data) % result_width) / f32(result_width);
+                //f32 f_uv1_y = (uv1 - result_data) / result_width / f32(result_height);
+                f32 f_uv1_x = u1;
+                f32 f_uv1_y = v1;
+
+                //f32 f_uv0_x = start_x / f32(result_width) + (face->glyph->bitmap.width) / f32(result_width);
+                //f32 f_uv0_x = f32((uv0 - result_data) % result_width) / f32(result_width);
+                //f32 f_uv0_y = (uv0 - result_data) / result_width / f32(result_height);
+                f32 f_uv0_x = u0;
+                f32 f_uv0_y = v1;
+
+                FontGlyph *glyph = &font_info->font_table[codepoint];
+
+
+                glyph->uv0_x = f_uv0_x;
+                glyph->uv1_x = f_uv1_x;
+                glyph->uv2_x = f_uv2_x;
+                glyph->uv3_x = f_uv3_x;
+
+                glyph->uv0_y = f_uv0_y;
+                glyph->uv1_y = f_uv1_y;
+                glyph->uv2_y = f_uv2_y;
+                glyph->uv3_y = f_uv3_y;
+
+                glyph_start_x += max_width_per_cell + margin_per_glyph + face->glyph->bitmap_left;
+            }
+            count++;
+        }
+    }
+    result.width = result_width;
+    result.height = result_height;
+    result.size = result_size;
+
+    result.data = result_data; // space for 4 glyphs
+    //zones[0].total_time = aim_timer_get_os_time() - zones[0].start ;
+    return result;
+}
+
 UPDATE_AND_RENDER(update_and_render)
 {
     // remove this must come from the invoker
@@ -1519,7 +1752,7 @@ UPDATE_AND_RENDER(update_and_render)
         ks = -1 * ks;
         accum_dt = 0;
     }
-    angle += ks * dt;
+    angle += dt * 0.53;
     // questions:
     // what stage does the mapping from ndc to screen cordinates aka pixel buffer
     //  probably after perspective divide, altough i should really really really watch the pikuma course first because im skipping too many fundamentals sadly!
@@ -1577,6 +1810,9 @@ UPDATE_AND_RENDER(update_and_render)
     LONGLONG model_now = timer_get_os_time();
 	f32 c = cos(angle);
 	f32 s = sin(angle);
+    __m128 m_c = _mm_set1_ps(c);
+    __m128 m_s = _mm_set1_ps(s);
+    __m128 m_negs = _mm_set1_ps(-s);
 	f32 c_90 = cos(3.14 / 2.0f);
 	f32 s_90 = sin(3.14 / 2.0f);
     Vec3 vv0_color = (Vec3) {255, 0, 0};
@@ -1644,8 +1880,8 @@ UPDATE_AND_RENDER(update_and_render)
                 //{
                 //    continue;
                 //}
-                f32 s = 0.4f;
-                __m128 scalar = _mm_load_ps1(&s);
+                f32 scale = 0.4f;
+                __m128 scalar = _mm_load_ps1(&scale);
 
                 __m128 x_translation = _mm_set1_ps(e->position.x);
                 __m128 y_translation = _mm_set1_ps(e->position.y);
@@ -1663,6 +1899,21 @@ UPDATE_AND_RENDER(update_and_render)
                     __m128 packed_z_prime = _mm_load_ps(z_prime);
 
                     // World space
+                    
+                        
+                    // rotation
+                       // result.x = p.x * c + p.z * s;
+                       // result.y = p.y;
+                       // result.z = -p.x * s + p.z * c;
+
+                    __m128 aux_packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, m_c), _mm_mul_ps(packed_z_prime, m_s));
+                    //packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
+                    __m128 aux_packed_z_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, m_negs), _mm_mul_ps(packed_z_prime, m_c));
+                    packed_x_prime = aux_packed_x_prime;
+                    packed_z_prime = aux_packed_z_prime;
+                    // rotation
+
+
                     packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
                     packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
                     packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
@@ -1833,7 +2084,7 @@ UPDATE_AND_RENDER(update_and_render)
     }
     #else
     {
-        #if 0
+        #if 1
         {
             //for (u32 entity = 0; entity < entity_count; entity++)
             for (u32 entity = 0; entity < 1; entity++)
@@ -2359,6 +2610,10 @@ UPDATE_AND_RENDER(update_and_render)
     }
     #endif
     EndTime();
+    {
+        // render text
+
+    }
 #if PROFILE
     for (u32 i = 0; i < 100; i++)
     {

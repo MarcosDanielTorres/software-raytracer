@@ -93,8 +93,10 @@ int main ()
     arena = arena_alloc(mb(2));
     g_transient_arena = arena_alloc(mb(2));
     // 4:3 resolutions
+    // 320 x 240
     // 640 x 480    (VGA)
     // 800 x 600    (SVGA)
+    // 940 x 540    
     // 1024 x 768   (XGA)
     // 1280 x 960
     // 1400 x 1050
@@ -111,8 +113,12 @@ int main ()
 
     i32 buffer_width = 640;
     i32 buffer_height = 480;
-    buffer_width = 1920;
-    buffer_height = 1080;
+    buffer_width = 320;
+    buffer_height = 240;
+    buffer_width = 940;
+    buffer_height = 540;
+    //buffer_width = 1920;
+    //buffer_height = 1080;
     WNDCLASSEXW wnd_class = 
     {
         .cbSize = sizeof(WNDCLASSEXW),
