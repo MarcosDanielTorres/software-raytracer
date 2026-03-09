@@ -7,7 +7,17 @@ struct OS_Handle
 
 typedef struct Software_Render_Buffer Software_Render_Buffer;
 typedef struct Software_Depth_Buffer Software_Depth_Buffer;
-#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, f32 total_time, f32 dt)
+typedef struct Game_Memory Game_Memory;
+struct Game_Memory
+{
+    b32 init;
+    void* persistent_memory;
+    void* transient_memory;
+    u64 persistent_memory_size;
+    u64 transient_memory_size;
+};
+
+#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Game_Memory *game_memory, f32 total_time, f32 dt)
 typedef UPDATE_AND_RENDER(Update_And_Render);
 UPDATE_AND_RENDER(update_and_render_stub)
 {
@@ -33,7 +43,7 @@ struct OS_FileReadResult
     u64 size;
 };
 
-internal OS_FileReadResult os_file_read(const char *filename);
+internal OS_FileReadResult os_file_read(Arena *arena, const char *filename);
 internal void os_load_dll(OS_LoadedDLL *dll);
 internal void os_unload_dll(OS_LoadedDLL *dll);
 internal void os_perform_hot_reload(OS_LoadedDLL *dll);

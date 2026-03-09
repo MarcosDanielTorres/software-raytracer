@@ -16,9 +16,11 @@
 //   Reverse depth has nothing to do with this, they are orthogonal concepts!
 
 #include "base_core.h"
+#include "base_arena.h"
 #include "base_os.h"
 #include "os_win32.h"
 #include "timer.h"
+#include "base_arena.c"
 #include "os_win32.c"
 #include "base_math.h"
 #include "timer.c"
@@ -27,13 +29,21 @@
 #include <emmintrin.h>
 #include <immintrin.h>
 #include <xmmintrin.h>
+#include "base_string.h"
+#include "base_string.c"
+//#include "font_loader.h"
+//#include "font_loader.c"
+#undef internal
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#define internal static
 
 #define SIMD 1
 #ifndef SIMD
     #define SIMD 0  
 #endif
 
-#define PROFILE 1
+#define PROFILE 0
 #ifndef PROFILE
     #define PROFILE 0  
 #endif
@@ -76,6 +86,7 @@
 
 
 global u32 discarded;
+global u32 vertices_count;
 internal f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
 {
     f32 t = (val - src_range_x) / (src_range_y - src_range_x);
@@ -98,8 +109,96 @@ internal void draw_rectangle(Software_Render_Buffer *buffer, f32 x, f32 y, f32 w
 		{
 			*row++ = color;
 		}
-		ptr += buffer->width;
+		ptr -= buffer->width;
 	}
+}
+
+typedef struct Bitmap Bitmap;
+struct Bitmap {
+    i32 width;
+    i32 height;
+    i32 pitch;
+    u8* buffer;
+};
+
+typedef struct FontGlyph FontGlyph;
+struct FontGlyph {
+    Bitmap bitmap;
+    i32 bitmap_top;
+    i32 bitmap_left;
+    i32 advance_x;
+
+    f32 uv0_x;
+    f32 uv1_x;
+    f32 uv2_x;
+    f32 uv3_x;
+
+    f32 uv0_y;
+    f32 uv1_y;
+    f32 uv2_y;
+    f32 uv3_y;
+};
+
+typedef struct FontInfo FontInfo;
+struct FontInfo
+{
+    i32 ascent;
+    i32 descent;
+    i32 line_height;
+    i32 max_glyph_width;
+    i32 max_glyph_height;
+    // probably renamed to max_char_advancement (same in monospace)
+    i32 max_char_width;
+    FontGlyph font_table[300];
+};
+
+global FontInfo font_info;
+internal void draw_text(Software_Render_Buffer *buffer, u32 baseline, u32 x, char *text)
+{
+    u32 pen_x = x;
+    for(char *c = text; *c != '\0'; c++)
+    {
+        FontGlyph glyph = font_info.font_table[(u32)*c];
+        u32 width = glyph.bitmap.width;
+        u32 height = glyph.bitmap.height;
+        u32 *ptr = buffer->data + buffer->width * (baseline - glyph.bitmap_top) + pen_x;
+        for(u32 y = 0; y < height; y++)
+        {
+            u32 *row = ptr;
+            for(u32 x = 0; x < width; x++)
+            {
+                u8 *source = glyph.bitmap.buffer + width * y + x;
+                #if 1
+                u32 alpha = *source << 24; 
+                u32 red = *source << 16; 
+                u32 green = *source << 8; 
+                u32 blue = *source; 
+                u32 color = alpha | red | green | blue;
+                *row++ = color;
+                #else
+
+                f32 sa = (f32)(*source / 255.0f);
+
+                u32 color = 0xFFFFFFFF;
+
+                f32 sr = (f32)((color >> 16) & 0xFF);
+                f32 sg = (f32)((color >> 8) & 0xFF);
+                f32 sb = (f32)((color >> 0) & 0xFF);
+
+                f32 dr = (f32)((*row >> 16) & 0xFF);
+                f32 dg = (f32)((*row >> 8) & 0xFF);
+                f32 db = (f32)((*row >> 0) & 0xFF);
+                u32 nr = (u32)((1.0f - sa) * dr + sa*sr);
+                u32 ng = (u32)((1.0f - sa) * dg + sa*sg);
+                u32 nb = (u32)((1.0f - sa) * db + sa*sb);
+
+                *row++ = (nr << 16) | (ng << 8) | (nb << 0);
+                #endif
+            }
+            ptr += buffer->width;
+        }
+        pen_x += font_info.max_char_width >> 6;
+    }
 }
 
 internal inline void draw_pixel(Software_Render_Buffer *buffer, f32 x, f32 y, u32 color)
@@ -181,8 +280,6 @@ struct Obj_Model_SIMD
     SIMD_Face faces;
     u32 padded_vertex_count;
 };
-global Obj_Model_SIMD model_simd;
-global SIMD_Result result;
 
 typedef struct Vec2F32 Vec2F32;
 struct Vec2F32
@@ -449,11 +546,6 @@ void draw_triangle__scanline(Software_Render_Buffer *buffer, Vec2F32 A, Vec2F32 
     //framebuffer->set(C.x, C.y, green);
 }
 
-global Obj_Model model_african_head;
-global Obj_Model model_teapot;
-global Obj_Model model_diablo;
-global Obj_Model model_f117;
-
 struct App_Memory
 {
     void *memory;
@@ -471,11 +563,10 @@ struct Entity
 {
     const char* name;
     Obj_Model *model;
+    Obj_Model_SIMD *model_simd;
     Vec3 position;
 };
 
-global Entity entities[100];
-global u32 entity_count;
 global u32 id;
 
 #if PROFILE
@@ -1324,18 +1415,26 @@ internal void barycentric_with_edge_stepping(Params *params)
 internal Obj_Model_SIMD obj_to_simd(Obj_Model model)
 {
     Obj_Model_SIMD result = {0};
-    u32 count = model.vertex_count & ~3u;
+    //u32 count = model.vertex_count & ~3u; // round down
+    u32 count = (model.vertex_count + 3u) & ~3u; // round up
     result.padded_vertex_count = count;
 
     result.vertices.x = (f32*) malloc(sizeof(f32) * count);
     result.vertices.y = (f32*) malloc(sizeof(f32) * count);
     result.vertices.z = (f32*) malloc(sizeof(f32) * count);
-    for(u32 vertex_index = 0; vertex_index < count; vertex_index++)
+    for(u32 vertex_index = 0; vertex_index < model.vertex_count; vertex_index++)
     {
         Vec3 model_vertex = model.vertices[vertex_index];
         result.vertices.x[vertex_index] = model_vertex.x;
         result.vertices.y[vertex_index] = model_vertex.y;
         result.vertices.z[vertex_index] = model_vertex.z;
+    }
+
+    for(u32 vertex_index = model.vertex_count; vertex_index < count; vertex_index++)
+    {
+        result.vertices.x[vertex_index] = 0.0f;
+        result.vertices.y[vertex_index] = 0.0f;
+        result.vertices.z[vertex_index] = 0.0f;
     }
 
     return result;
@@ -1350,6 +1449,7 @@ struct TestPackerResult
     u32 height;
 };
 
+#if 0
 internal TestPackerResult
 test_packer(FontInfo *font_info)
 {
@@ -1572,45 +1672,160 @@ test_packer(FontInfo *font_info)
     //zones[0].total_time = aim_timer_get_os_time() - zones[0].start ;
     return result;
 }
+    #endif
 
+FontGlyph font_load_glyph(FT_Face face, char codepoint, FontInfo *info) {
+    FontGlyph result = {0};
+    // The index has nothing to do with the codepoint
+    u32 glyph_index = FT_Get_Char_Index(face, codepoint);
+    if (glyph_index) 
+    {
+        FT_Error load_glyph_err = FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT); 
+        if (load_glyph_err) 
+        {
+            const char* err_str = FT_Error_String(load_glyph_err);
+            printf("FT_Load_Glyph: %s\n", err_str);
+        }
+
+        FT_Error render_glyph_err = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL);
+        if (render_glyph_err) 
+        {
+            const char* err_str = FT_Error_String(render_glyph_err);
+            printf("FT_Load_Glyph: %s\n", err_str);
+        }
+
+		info->max_glyph_width = Max(info->max_glyph_width, face->glyph->bitmap.width);
+		info->max_glyph_height = Max(info->max_glyph_height, face->glyph->bitmap.rows);
+
+        result.bitmap.width = face->glyph->bitmap.width;
+        result.bitmap.height = face->glyph->bitmap.rows;
+        result.bitmap.pitch = face->glyph->bitmap.pitch;
+        
+        result.bitmap_top = face->glyph->bitmap_top;
+        result.bitmap_left = face->glyph->bitmap_left;
+        result.advance_x = face->glyph->advance.x;
+        info->max_char_width = Max(info->max_char_width, result.advance_x);
+
+        FT_Bitmap* bitmap = &face->glyph->bitmap;
+        result.bitmap.buffer = (u8*)malloc(result.bitmap.pitch * result.bitmap.height);
+        memcpy(result.bitmap.buffer, bitmap->buffer, result.bitmap.pitch * result.bitmap.height);
+    }
+    return result;
+}
+
+typedef struct Game_State Game_State;
+struct Game_State
+{
+    Arena *arena;
+    Obj_Model model_african_head;
+    Obj_Model_SIMD model_african_head_simd;
+    Obj_Model model_teapot;
+    Obj_Model_SIMD model_teapot_simd;
+    Obj_Model model_diablo;
+    Obj_Model_SIMD model_diablo_simd;
+    Obj_Model model_f117;
+	Entity entities[100];
+	u32 entity_count;
+    SIMD_Result result;
+};
+
+global u64 frame_count;
+char frame_time_buf[200];
 UPDATE_AND_RENDER(update_and_render)
 {
-    // remove this must come from the invoker
-    local_persist b32 init = 0;
-    if(!init)
+    Game_State *game_state = (Game_State*)game_memory->persistent_memory;
+    if(!game_memory->init)
     {
+        printf("init\n");
+        game_state->arena = arena_alloc_with_base(game_memory->persistent_memory_size - sizeof(Game_State), (u8*)game_memory->persistent_memory + sizeof(Game_State));
+        Arena *arena = game_state->arena;
+
         timer_init();
+        {
+            FT_Library library;
+            FT_Error error = FT_Init_FreeType(&library);
+            if (error)
+            {
+                const char* err_str = FT_Error_String(error);
+                printf("FT_Init_FreeType: %s\n", err_str);
+                exit(1);
+            }
+
+            const char *font_path = "C:\\Windows\\Fonts\\CascadiaMono.ttf";
+            OS_FileReadResult font_file = os_file_read(arena, font_path);
+
+            FT_Face face = {0};
+            if(font_file.data)
+            {
+                FT_Open_Args args = {0};
+                args.flags = FT_OPEN_MEMORY;
+                args.memory_base = (u8*) font_file.data;
+                args.memory_size = font_file.size;
+
+                FT_Error opened_face = FT_Open_Face(library, &args, 0, &face);
+                if (opened_face) 
+                {
+                    const char* err_str = FT_Error_String(opened_face);
+                    printf("FT_Open_Face: %s\n", err_str);
+                    exit(1);
+                }
+
+                FT_Error set_char_size_err = FT_Set_Char_Size(face, 4 * 64, 4 * 64, 300, 300);
+                FT_Error set_char_size_erra = FT_Set_Pixel_Sizes(face, 0, 10);
+                
+                font_info.ascent = face->size->metrics.ascender >> 6;
+                font_info.descent = - (face->size->metrics.descender >> 6); 
+                font_info.line_height = face->size->metrics.height >> 6;
+
+                {
+                    for(u32 codepoint = '!'; codepoint <= '~'; codepoint++) {
+                        font_info.font_table[(u32)codepoint] = font_load_glyph(face, (char)codepoint, &font_info);
+                    }
+                    font_info.font_table[(u32)(' ')] = font_load_glyph(face, (char)(' '), &font_info);
+                }
+            }
+        }
+
         const char *filename = ".\\obj\\african_head\\african_head.obj";
-        OS_FileReadResult obj = os_file_read(filename);
-        model_african_head = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_african_head.face_count);
+        OS_FileReadResult obj = os_file_read(arena, filename);
+        game_state->model_african_head = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, game_state->model_african_head.face_count);
 
         filename = ".\\obj\\teapot.obj";
-        obj = os_file_read(filename);
-        model_teapot = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_teapot.face_count);
+        obj = os_file_read(arena, filename);
+        game_state->model_teapot = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, game_state->model_teapot.face_count);
 
         filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
-        obj = os_file_read(filename);
-        model_diablo = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_diablo.face_count);
+        obj = os_file_read(arena, filename);
+        game_state->model_diablo = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, game_state->model_diablo.face_count);
 
         filename = ".\\obj\\f117.obj";
-        obj = os_file_read(filename);
-        model_f117 = parse_obj(obj.data, obj.size);
-        printf("Loaded: %s, triangle count: %d\n", filename, model_f117.face_count);
+        obj = os_file_read(arena, filename);
+        game_state->model_f117 = parse_obj(obj.data, obj.size);
+        printf("Loaded: %s, triangle count: %d\n", filename, game_state->model_f117.face_count);
+
+        game_state->model_teapot_simd = obj_to_simd(game_state->model_teapot);
+        game_state->model_diablo_simd = obj_to_simd(game_state->model_diablo);
+        game_state->model_african_head_simd = obj_to_simd(game_state->model_african_head);
         
         {
-            entities[entity_count++] = (Entity) { .name = "enemy_1", .model = &model_teapot, .position = (Vec3) {0.0, -0.8, 3} };
+            Entity* entities = game_state->entities;
+            u32 entity_count = game_state->entity_count;
             // TODO face_index = 1 of this model references 117 vertex which is not right as 117 > vertex_count and this should be 
             // the contents of the first face: f 1/1/1 62/2/1 61/3/1
             //entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
-            entities[entity_count++] = (Entity) { .name = "enemy_3", .model = &model_diablo, .position = (Vec3) {0.5, 0, 1} };
-            entities[entity_count++] = (Entity) { .name = "enemy_4", .model = &model_african_head, .position = (Vec3) {-0.5, -0.2, 1} };
-            // should in theory??? be contained between +- 2.303627
+            entities[entity_count++] = (Entity) { .name = "enemy_4", .model_simd = &game_state->model_diablo_simd, .model = &game_state->model_diablo, .position = (Vec3) {-0.5, -0.2, 3} }; // should in theory??? be contained between +- 2.303627
+            entities[entity_count++] = (Entity) { .name = "enemy_1", .model_simd = &game_state->model_teapot_simd, .model = &game_state->model_teapot, .position = (Vec3) {3.8, -0.8, 8} };
+            entities[entity_count++] = (Entity) { .name = "enemy_3", .model_simd = &game_state->model_african_head_simd, .model = &game_state->model_african_head, .position = (Vec3) {0.5, 0, 3} };
+            // this configuration breaks all the models:
+            // diablo
+            // teapot
+            // african head
+            game_state->entity_count = entity_count;
+            printf("Entity count: %d\n", entity_count);
         }
-        printf("Entity count: %d\n", entity_count);
-
         #if PROFILE
         time_context = (TimeContext*)malloc(sizeof(TimeContext));
         #endif
@@ -1630,18 +1845,24 @@ UPDATE_AND_RENDER(update_and_render)
             printf("%s\n", msg);
 
         #endif
-        model_simd = obj_to_simd(model_teapot);
 
-        result.screen_space_vertices = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
-        result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
-        result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
-        result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
-        result.inv_w = (f32*)malloc(sizeof(f32) * (model_simd.padded_vertex_count));
-        init = 1;
+        u32 total_vertices = 0;
+        {
+            total_vertices += game_state->model_teapot_simd.padded_vertex_count;
+            total_vertices += game_state->model_diablo_simd.padded_vertex_count;
+            total_vertices += game_state->model_african_head_simd.padded_vertex_count;
+            //for(u32 i = 0; i < game_state->entity_count; i++)
+            //{
+            //    total_vertices += ;
+            //}
+        }
+        game_state->result.screen_space_vertices = (SIMD_Vec3*)malloc(sizeof(SIMD_Vec3));
+        game_state->result.screen_space_vertices->x = (f32*)malloc(sizeof(f32) * (total_vertices));
+        game_state->result.screen_space_vertices->y = (f32*)malloc(sizeof(f32) * (total_vertices));
+        game_state->result.screen_space_vertices->z = (f32*)malloc(sizeof(f32) * (total_vertices));
+        game_state->result.inv_w = (f32*)malloc(sizeof(f32) * (total_vertices));
 
         {
-
-
             f32 ax = 1;
             f32 ay = 2;
             f32 bx = 1;
@@ -1730,7 +1951,7 @@ UPDATE_AND_RENDER(update_and_render)
             #endif
 
         }
-
+        game_memory->init = 1;
     }
     u32 black = 0xff000000;
     u32 white = 0xffffffff;
@@ -1739,7 +1960,6 @@ UPDATE_AND_RENDER(update_and_render)
     u32 blue = 0xff0000ff;
     u32 yellow = green | red;
     u32 steam_chat_background_color = 0xff1e2025;
-    //draw_rectangle(buffer, 0, 0, buffer->width, buffer->height, 0xff111f0f);
     clear_screen(buffer, steam_chat_background_color);
     clear_depth_buffer(depth_buffer);
     
@@ -1758,9 +1978,6 @@ UPDATE_AND_RENDER(update_and_render)
     //  probably after perspective divide, altough i should really really really watch the pikuma course first because im skipping too many fundamentals sadly!
     // but first i will fix obj
     
-    Vec3 camera_eye = (Vec3) {0, 0.0, 0};
-    Vec3 camera_target = (Vec3) {0, 0, 1};
-    camera_target = vec3_sub(camera_target, camera_eye);
     f32 fov = 3.141592 / 3.0; // 60 deg
     //f32 aspect_ori = (f32)buffer->height / (f32)buffer->width;
     f32 aspect = (f32)buffer->width / (f32)buffer->height;
@@ -1804,7 +2021,63 @@ UPDATE_AND_RENDER(update_and_render)
     f32 g_over_aspect = g / aspect;
     // rolled perspective
 
+    Vec3 camera_eye = (Vec3) {0.0, 0.3, 0};
+    Vec3 camera_target = (Vec3) {0.0, 0.0, 1};
     Mat4 view = mat4_look_at(camera_eye, camera_target, (Vec3) {0, 1, 0});
+
+    __m128 view_row_0;
+    __m128 view_row_1;
+    __m128 view_row_2;
+    __m128 view_row_3;
+
+    __m128 view_right_x;
+    __m128 view_right_y;
+    __m128 view_right_z;
+
+    __m128 view_up_x;
+    __m128 view_up_y;
+    __m128 view_up_z;
+
+    __m128 view_fwd_x;
+    __m128 view_fwd_y;
+    __m128 view_fwd_z;
+
+    __m128 view_dot_x;
+    __m128 view_dot_y;
+    __m128 view_dot_z;
+
+    {
+        Vec3 eye = camera_eye;
+        Vec3 target = camera_target;
+        Vec3 up = (Vec3) {0, 1, 0};
+
+        Vec3 z = vec3_sub(target, eye);
+        z = vec3_normalize(z);
+        Vec3 x = vec3_cross(up, z);
+        x = vec3_normalize(x);
+        Vec3 y = vec3_cross(z, x);
+        
+        view_right_x = _mm_set1_ps(x.x);
+        view_right_y = _mm_set1_ps(x.y);
+        view_right_z = _mm_set1_ps(x.z);
+
+        view_up_x = _mm_set1_ps(y.x);
+        view_up_y = _mm_set1_ps(y.y);
+        view_up_z = _mm_set1_ps(y.z);
+
+        view_fwd_x = _mm_set1_ps(z.x);
+        view_fwd_y = _mm_set1_ps(z.y);
+        view_fwd_z = _mm_set1_ps(z.z);
+
+
+        view_dot_x = _mm_set1_ps(-vec3_dot(x, eye));
+        view_dot_y = _mm_set1_ps(-vec3_dot(y, eye));
+        view_dot_z = _mm_set1_ps(-vec3_dot(z, eye));
+        //view_row_0 = _mm_set1_ps( x.x, x.y, x.z, -vec3_dot(x, eye) );
+        //view_row_1 = _mm_setr_ps( y.x, y.y, y.z, -vec3_dot(y, eye) );
+        //view_row_2 = _mm_setr_ps( z.x, z.y, z.z, -vec3_dot(z, eye) );
+        //view_row_3 = _mm_setr_ps(0, 0, 0, 1);
+    }
     //view = mat4_identity();
     
     LONGLONG model_now = timer_get_os_time();
@@ -1870,16 +2143,13 @@ UPDATE_AND_RENDER(update_and_render)
 
         __m128 half_width  = _mm_set1_ps(0.5f * (f32)buffer->width);
         __m128 half_height = _mm_set1_ps(0.5f * (f32)buffer->height);
-        for (u32 entity = 0; entity < 1; entity++)
+        __m128 neg_half_width  = _mm_set1_ps(-0.5f * (f32)buffer->width);
+        __m128 neg_half_height = _mm_set1_ps(-0.5f * (f32)buffer->height);
+        for (u32 entity = 0; entity < 3; entity++)
         {
-            Entity* e = entities + entity;
-            Obj_Model *model = e->model;
-            if(model->is_valid)
+            Entity* e = game_state->entities + entity;
+            Obj_Model_SIMD *model = e->model_simd;
             {
-                //if (model->vertex_count % 4 != 0)
-                //{
-                //    continue;
-                //}
                 f32 scale = 0.4f;
                 __m128 scalar = _mm_load_ps1(&scale);
 
@@ -1887,16 +2157,16 @@ UPDATE_AND_RENDER(update_and_render)
                 __m128 y_translation = _mm_set1_ps(e->position.y);
                 __m128 z_translation = _mm_set1_ps(e->position.z);
 
-                u32* indices = (u32*) malloc(sizeof(u32) * model_simd.padded_vertex_count);
-                for(u32 vertex_index = 0; vertex_index < model_simd.padded_vertex_count; vertex_index+=4)
+                for(u32 vertex_index = 0; vertex_index < model->padded_vertex_count; vertex_index+=4)
                 {
+                    //if (vertex_index + 4 >= e->model->vertex_count) break;
                     //BeginTime("vertex transformation", 0);
-                    f32 *x_prime = &model_simd.vertices.x[vertex_index];
-                    f32 *y_prime = &model_simd.vertices.y[vertex_index];
-                    f32 *z_prime = &model_simd.vertices.z[vertex_index];
-                    __m128 packed_x_prime = _mm_load_ps(x_prime);
-                    __m128 packed_y_prime = _mm_load_ps(y_prime);
-                    __m128 packed_z_prime = _mm_load_ps(z_prime);
+                    f32 *x_prime = &model->vertices.x[vertex_index];
+                    f32 *y_prime = &model->vertices.y[vertex_index];
+                    f32 *z_prime = &model->vertices.z[vertex_index];
+                    __m128 packed_x_prime = _mm_loadu_ps(x_prime);
+                    __m128 packed_y_prime = _mm_loadu_ps(y_prime);
+                    __m128 packed_z_prime = _mm_loadu_ps(z_prime);
 
                     // World space
                     
@@ -1912,7 +2182,7 @@ UPDATE_AND_RENDER(update_and_render)
                     packed_x_prime = aux_packed_x_prime;
                     packed_z_prime = aux_packed_z_prime;
                     // rotation
-
+                    
 
                     packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
                     packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
@@ -1922,7 +2192,20 @@ UPDATE_AND_RENDER(update_and_render)
                     packed_y_prime = _mm_add_ps(packed_y_prime, y_translation);
                     packed_z_prime = _mm_add_ps(packed_z_prime, z_translation);
 
+
+                    // view matrix
+                    {
+                        __m128 packed_x_aux_prime = _mm_add_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(view_right_x, packed_x_prime), _mm_mul_ps(view_right_y, packed_y_prime)), _mm_mul_ps(view_right_z, packed_z_prime)), view_dot_x);
+                        __m128 packed_y_aux_prime = _mm_add_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(view_up_x, packed_x_prime), _mm_mul_ps(view_up_y, packed_y_prime)), _mm_mul_ps(view_up_z, packed_z_prime)), view_dot_y);
+                        __m128 packed_z_aux_prime = _mm_add_ps(_mm_add_ps(_mm_add_ps(_mm_mul_ps(view_fwd_x, packed_x_prime), _mm_mul_ps(view_fwd_y, packed_y_prime)), _mm_mul_ps(view_fwd_z, packed_z_prime)), view_dot_z);
+                        packed_x_prime = packed_x_aux_prime;
+                        packed_y_prime = packed_y_aux_prime;
+                        packed_z_prime = packed_z_aux_prime;
+
+                    }
                     __m128 view_space_packed_z = packed_z_prime;
+                    
+
                     // perspective matrix
                     // after: in clip space
                     packed_x_prime = _mm_mul_ps(packed_x_prime, _mm_load_ps1(&g_over_aspect));
@@ -1937,8 +2220,8 @@ UPDATE_AND_RENDER(update_and_render)
                     // Numerator masked → 1.0 only in lanes where we will divide
                     __m128 num = _mm_and_ps(one, mask);
 
-                    // Denominator masked → 0 in lanes where w == 0
-                    __m128 den = _mm_and_ps(view_space_packed_z, mask);
+                    // Use 1.0 in masked-off lanes so invalid lanes evaluate to 0 instead of NaN.
+                    __m128 den = _mm_or_ps(_mm_and_ps(view_space_packed_z, mask), _mm_andnot_ps(mask, one));
 
                     // Now division executes only in valid lanes;
                     // invalid lanes see 0/0 → undefined but masked off
@@ -1958,93 +2241,45 @@ UPDATE_AND_RENDER(update_and_render)
                         _mm_andnot_ps(mask, packed_z_prime));
 
 
-                    // viewport space
-                    // this: _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
-                    // should be equivalent to: v.x = (v.x * 0.5f + 0.5f) * buffer->width;
-                    // after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
-                    // or: v.x = v.x * half_width + half_width
-                    // same for v.y
+                    // Viewport Space
+                    // I was using this one! It should change the inside tests. Which doesnt seem like it...
+                    // For Y down:
+                    //     this: _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+                    //     should be equivalent to: v.x = (v.x * 0.5f + 0.5f) * buffer->width;
+                    //     after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
+                    //     or: v.x = v.x * half_width + half_width
+                    //     same for v.y
+                    // packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+                    // packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, half_height), half_height);
 
-                    packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
-                    packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, half_height), half_height);
+                    // For Y up:
+                    //     v.x = (1.0f - (v.x * 0.5f + 0.5f)) * buffer->width;
+                    //     1.0f - v.x * 0.5 - 0.5f => (0.5f - v.x * 0.5)
+                    //     (0.5 - 0.5f * v.x) * buffer->width => half_width - half_width * v.x
                     
-                    _mm_store_ps(result.screen_space_vertices->x + vertex_index, packed_x_prime);
-                    _mm_store_ps(result.screen_space_vertices->y + vertex_index, packed_y_prime); 
-                    _mm_store_ps(result.screen_space_vertices->z + vertex_index, packed_z_prime); 
-                    _mm_store_ps(result.inv_w + vertex_index, inv_w); 
+                    packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, neg_half_width), half_width);
+                    packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, neg_half_height), half_height);
+
+                    
+                    _mm_storeu_ps(game_state->result.screen_space_vertices->x + vertices_count + vertex_index, packed_x_prime);
+                    _mm_storeu_ps(game_state->result.screen_space_vertices->y + vertices_count + vertex_index, packed_y_prime); 
+                    _mm_storeu_ps(game_state->result.screen_space_vertices->z + vertices_count + vertex_index, packed_z_prime); 
+                    _mm_storeu_ps(game_state->result.inv_w + vertices_count + vertex_index, inv_w); 
                 }
 
 
-                for(int face_index = 0; face_index < model->face_count; face_index++)
+                for(int face_index = 0; face_index < e->model->face_count; face_index++)
                 {
                     {
+                        Face face = e->model->faces[face_index];
 
-                        #if 0
-                        SIMD_Face simd_face = model_simd.faces;
-                        u32 f0 = face_index + 0;
-                        u32 f1 = face_index + 1;
-                        u32 f2 = face_index + 2;
-                        u32 f3 = face_index + 3;
+                        Vec3 v0 = (Vec3) {game_state->result.screen_space_vertices->x[face.v[0] - 1 + vertices_count], game_state->result.screen_space_vertices->y[face.v[0] - 1 + vertices_count], game_state->result.screen_space_vertices->z[face.v[0] - 1 + vertices_count]};
+                        Vec3 v1 = (Vec3) {game_state->result.screen_space_vertices->x[face.v[1] - 1 + vertices_count], game_state->result.screen_space_vertices->y[face.v[1] - 1 + vertices_count], game_state->result.screen_space_vertices->z[face.v[1] - 1 + vertices_count]};
+                        Vec3 v2 = (Vec3) {game_state->result.screen_space_vertices->x[face.v[2] - 1 + vertices_count], game_state->result.screen_space_vertices->y[face.v[2] - 1 + vertices_count], game_state->result.screen_space_vertices->z[face.v[2] - 1 + vertices_count]};
 
-
-
-                        __m128 v0x = _mm_setr_ps(
-                            result.screen_space_vertices->x[simd_face.v0[f0]],
-                            result.screen_space_vertices->x[simd_face.v0[f1]],
-                            result.screen_space_vertices->x[simd_face.v0[f2]],
-                            result.screen_space_vertices->x[simd_face.v0[f3]]);
-                        __m128 v1x = _mm_setr_ps(
-                            result.screen_space_vertices->x[simd_face.v1[f0]],
-                            result.screen_space_vertices->x[simd_face.v1[f1]],
-                            result.screen_space_vertices->x[simd_face.v1[f2]],
-                            result.screen_space_vertices->x[simd_face.v1[f3]]);
-                        __m128 v2x = _mm_setr_ps(
-                            result.screen_space_vertices->x[simd_face.v2[f0]],
-                            result.screen_space_vertices->x[simd_face.v2[f1]],
-                            result.screen_space_vertices->x[simd_face.v2[f2]],
-                            result.screen_space_vertices->x[simd_face.v2[f3]]);
-                        __m128 v0y = _mm_setr_ps(
-                            result.screen_space_vertices->y[simd_face.v0[f0]],
-                            result.screen_space_vertices->y[simd_face.v0[f1]],
-                            result.screen_space_vertices->y[simd_face.v0[f2]],
-                            result.screen_space_vertices->y[simd_face.v0[f3]]);
-                        __m128 v1y = _mm_setr_ps(
-                            result.screen_space_vertices->y[simd_face.v1[f0]],
-                            result.screen_space_vertices->y[simd_face.v1[f1]],
-                            result.screen_space_vertices->y[simd_face.v1[f2]],
-                            result.screen_space_vertices->y[simd_face.v1[f3]]);
-                        __m128 v2y = _mm_setr_ps(
-                            result.screen_space_vertices->y[simd_face.v2[f0]],
-                            result.screen_space_vertices->y[simd_face.v2[f1]],
-                            result.screen_space_vertices->y[simd_face.v2[f2]],
-                            result.screen_space_vertices->y[simd_face.v2[f3]]);
-
-                        __m128 inv_w0 = _mm_setr_ps(
-                            result.inv_w[simd_face.v0[f0]],
-                            result.inv_w[simd_face.v0[f1]],
-                            result.inv_w[simd_face.v0[f2]],
-                            result.inv_w[simd_face.v0[f3]]);
-                        __m128 inv_w1 = _mm_setr_ps(
-                            result.inv_w[simd_face.v1[f0]],
-                            result.inv_w[simd_face.v1[f1]],
-                            result.inv_w[simd_face.v1[f2]],
-                            result.inv_w[simd_face.v1[f3]]);
-                        __m128 inv_w2 = _mm_setr_ps(
-                            result.inv_w[simd_face.v2[f0]],
-                            result.inv_w[simd_face.v2[f1]],
-                            result.inv_w[simd_face.v2[f2]],
-                            result.inv_w[simd_face.v2[f3]]);
-
-                        #else
-                        Face face = model->faces[face_index];
-
-                        Vec3 v0 = (Vec3) {result.screen_space_vertices->x[face.v[0] - 1], result.screen_space_vertices->y[face.v[0] - 1], result.screen_space_vertices->z[face.v[0] - 1]};
-                        Vec3 v1 = (Vec3) {result.screen_space_vertices->x[face.v[1] - 1], result.screen_space_vertices->y[face.v[1] - 1], result.screen_space_vertices->z[face.v[1] - 1]};
-                        Vec3 v2 = (Vec3) {result.screen_space_vertices->x[face.v[2] - 1], result.screen_space_vertices->y[face.v[2] - 1], result.screen_space_vertices->z[face.v[2] - 1]};
-
-                        f32 inv_w0 = result.inv_w[face.v[0] - 1];
-                        f32 inv_w1 = result.inv_w[face.v[1] - 1];
-                        f32 inv_w2 = result.inv_w[face.v[2] - 1];
+                        f32 inv_w0 = game_state->result.inv_w[face.v[0] - 1 + vertices_count];
+                        f32 inv_w1 = game_state->result.inv_w[face.v[1] - 1 + vertices_count];
+                        f32 inv_w2 = game_state->result.inv_w[face.v[2] - 1 + vertices_count];
 
                         f32 min_x = Min(Min(v0.x, v1.x), v2.x);
                         f32 min_y = Min(Min(v0.y, v1.y), v2.y);
@@ -2076,9 +2311,9 @@ UPDATE_AND_RENDER(update_and_render)
                             //BeginTime("barycentric calculation", 0);
                             barycentric_with_edge_stepping_SIMD(&params);
                         }
-                        #endif
                     }
                 }
+                vertices_count += model->padded_vertex_count;
             }
         }
     }
@@ -2089,7 +2324,7 @@ UPDATE_AND_RENDER(update_and_render)
             //for (u32 entity = 0; entity < entity_count; entity++)
             for (u32 entity = 0; entity < 1; entity++)
             {
-                Entity* e = entities + entity;
+                Entity* e = game_state->entities + entity;
                 Obj_Model *model = e->model;
                 if(model->is_valid)
                 {
@@ -2112,18 +2347,18 @@ UPDATE_AND_RENDER(update_and_render)
 
 
                             #if ROTATION
-                            if(model == &model_f117)
-                            {
+                            //if(model == &model_f117)
+                            //{
 
-                                v0 = vec3_rotate_z(v0, c_90, s_90);
-                                v1 = vec3_rotate_z(v1, c_90, s_90);
-                                v2 = vec3_rotate_z(v2, c_90, s_90);
+                            //    v0 = vec3_rotate_z(v0, c_90, s_90);
+                            //    v1 = vec3_rotate_z(v1, c_90, s_90);
+                            //    v2 = vec3_rotate_z(v2, c_90, s_90);
 
-                                v0 = vec3_rotate_y(v0, c, s);
-                                v1 = vec3_rotate_y(v1, c, s);
-                                v2 = vec3_rotate_y(v2, c, s);
-                            }
-                            else
+                            //    v0 = vec3_rotate_y(v0, c, s);
+                            //    v1 = vec3_rotate_y(v1, c, s);
+                            //    v2 = vec3_rotate_y(v2, c, s);
+                            //}
+                            //else
                             {
                                 v0 = vec3_rotate_y(v0, c, s);
                                 v1 = vec3_rotate_y(v1, c, s);
@@ -2610,10 +2845,6 @@ UPDATE_AND_RENDER(update_and_render)
     }
     #endif
     EndTime();
-    {
-        // render text
-
-    }
 #if PROFILE
     for (u32 i = 0; i < 100; i++)
     {
@@ -2624,8 +2855,22 @@ UPDATE_AND_RENDER(update_and_render)
     }
     printf("Discarded trigs: %d of %d total trigs\n", discarded, model_teapot.face_count);
 #endif
-    //LONGLONG model_end = timer_get_os_time();
-    //LONGLONG result = model_end - model_now;
+    {
+        // render text
+        if(frame_count % 300 == 0)
+        {
+            LONGLONG model_end = timer_get_os_time();
+            LONGLONG result = model_end - model_now;
+            snprintf(frame_time_buf, 300, "per frame time: %.2fms\n", timer_os_time_to_ms(result));
+        }
+        draw_text(buffer, 10, 4, frame_time_buf);
+        char buf[300];
+        snprintf(buf, 300, "frame count: %lld\n", frame_count);
+        draw_text(buffer, 30, 4, buf);
+        //draw_rectangle(buffer, 120, 200, 10, 10, 0xFFFF0000);
+    }
     
     //printf("per frame time: %.2fms\n", timer_os_time_to_ms(result));
+    vertices_count = 0;
+    frame_count++;
 }

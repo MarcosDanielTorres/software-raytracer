@@ -1,16 +1,16 @@
 // TODO stretchdibbits in release - debug takes around 12% of the time when running it close to a minute.
 //  Try to use dx11 for presentation to see if the time lowers
 #include "base_core.h"
+#include "base_arena.h"
 #include "base_os.h"
 #include "os_win32.h"
 #include "timer.h"
+#include "base_arena.c"
 #include "os_win32.c"
 #include "timer.c"
 
-#include "base_arena.h"
 #include "base_string.h"
 
-#include "base_arena.c"
 #include "base_string.c"
 #include "winnt.h"
 
@@ -203,6 +203,13 @@ int main ()
 	depth_buffer->info.bmiHeader.biClrUsed = 0;
 	depth_buffer->info.bmiHeader.biClrImportant = 0;
 
+    Game_Memory memory = {0};
+    memory.persistent_memory_size = mb(2);
+    memory.transient_memory_size = mb(1);
+
+    memory.persistent_memory = VirtualAlloc(0, memory.persistent_memory_size + memory.transient_memory_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    memory.transient_memory = (u8*)memory.persistent_memory + memory.persistent_memory_size;
+
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
@@ -236,7 +243,7 @@ int main ()
         win32_process_pending_msgs();
 
         os_perform_hot_reload(&game_dll);
-        game_dll.app_update_and_render(buffer, depth_buffer, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
+        game_dll.app_update_and_render(buffer, depth_buffer, &memory, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
 
         //LONGLONG stretch_now = timer_get_os_time();

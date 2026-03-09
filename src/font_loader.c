@@ -88,8 +88,8 @@ FontGlyph font_load_glyph(FT_Face face, char codepoint, FontInfo *info) {
         info->max_char_width = Max(info->max_char_width, result.advance_x);
 
         FT_Bitmap* bitmap = &face->glyph->bitmap;
-        //result.bitmap.buffer = (u8*)malloc(result.bitmap.pitch * result.bitmap.height);
-        //memcpy(result.bitmap.buffer, bitmap->buffer, result.bitmap.pitch * result.bitmap.height);
+        result.bitmap.buffer = (u8*)malloc(result.bitmap.pitch * result.bitmap.height);
+        memcpy(result.bitmap.buffer, bitmap->buffer, result.bitmap.pitch * result.bitmap.height);
     }
     return result;
 }

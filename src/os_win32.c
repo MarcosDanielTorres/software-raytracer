@@ -1,4 +1,4 @@
-internal OS_FileReadResult os_file_read(const char *filename)
+internal OS_FileReadResult os_file_read(Arena *arena, const char *filename)
 {
     OS_FileReadResult result = {0};
     FILE *file = fopen(filename, "rb");
@@ -10,7 +10,7 @@ internal OS_FileReadResult os_file_read(const char *filename)
     fseek(file, 0, SEEK_END);
     size_t size = ftell(file);
     fseek(file, 0, SEEK_SET);
-    u8 *buf = (u8*)malloc(size + 1);
+    u8 *buf = (u8*)arena_push_size(arena, u8, size + 1);
     fread(buf, 1, size, file);
     
     result.data = buf;

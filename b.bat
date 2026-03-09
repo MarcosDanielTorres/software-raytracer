@@ -15,7 +15,7 @@ if "%mode%" == "release"        set compiler_flags=-O2
 echo [Compiler %compiler% - %mode%]
 echo Compiling game
 echo PDB > game-lock.temp
-call cl -FC -nologo -WX %compiler_flags% -LD ..\src\game.c /link -incremental:no -opt:ref /EXPORT:update_and_render
+call cl -FC -nologo -WX %compiler_flags% -I..\thirdparty\freetype-2.13.3\custom -I..\thirdparty\freetype-2.13.3\include2 -LD ..\src\game.c /link -incremental:no -opt:ref /EXPORT:update_and_render libfreetype-r.lib
 del game-lock.temp
 
 echo Compiling engine

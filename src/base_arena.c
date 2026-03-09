@@ -15,6 +15,16 @@ arena_alloc(size_t size)
     arena->temp_count = 0;
     return arena;
 }
+internal Arena *
+arena_alloc_with_base(size_t size, u8* base)
+{
+    Arena *arena = (Arena*)base;
+    arena->base = base + sizeof(Arena);
+    arena->len = 0;
+    arena->max_len = size;
+    arena->temp_count = 0;
+    return arena;
+}
 #endif
 
 internal void arena_init(Arena* arena, size_t size, u8* base) 
