@@ -916,6 +916,19 @@ internal void barycentric_with_edge_stepping_SIMD(Params *params)
     __m128i v_max_xorig = _mm_set1_epi32((int)max_x);
 
     f32 area = orient_2d(s0, s1, s2);          // signed
+
+    #if 0 
+    const f32 area_eps = 1e-6f;
+
+    if (fabsf(area) <= area_eps)
+    {
+        return;
+    }
+    if(area > 0.0f)
+    {
+        return;
+    }
+    #endif
     f32 inv_area = 1.0f / area;
 
     Edge e12 = {0};
@@ -1816,7 +1829,7 @@ UPDATE_AND_RENDER(update_and_render)
             // TODO face_index = 1 of this model references 117 vertex which is not right as 117 > vertex_count and this should be 
             // the contents of the first face: f 1/1/1 62/2/1 61/3/1
             //entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
-            entities[entity_count++] = (Entity) { .name = "enemy_4", .model_simd = &game_state->model_diablo_simd, .model = &game_state->model_diablo, .position = (Vec3) {-0.5, -0.2, 3} }; // should in theory??? be contained between +- 2.303627
+            entities[entity_count++] = (Entity) { .name = "enemy_4", .model_simd = &game_state->model_diablo_simd, .model = &game_state->model_diablo, .position = (Vec3) {2.5, -0.2, 3} }; // should in theory??? be contained between +- 2.303627
             entities[entity_count++] = (Entity) { .name = "enemy_1", .model_simd = &game_state->model_teapot_simd, .model = &game_state->model_teapot, .position = (Vec3) {3.8, -0.8, 8} };
             entities[entity_count++] = (Entity) { .name = "enemy_3", .model_simd = &game_state->model_african_head_simd, .model = &game_state->model_african_head, .position = (Vec3) {0.5, 0, 3} };
             // this configuration breaks all the models:
@@ -2256,7 +2269,43 @@ UPDATE_AND_RENDER(update_and_render)
                     //     v.x = (1.0f - (v.x * 0.5f + 0.5f)) * buffer->width;
                     //     1.0f - v.x * 0.5 - 0.5f => (0.5f - v.x * 0.5)
                     //     (0.5 - 0.5f * v.x) * buffer->width => half_width - half_width * v.x
+
+
+                    /*
                     
+                    // Viewport transform: NDC -> framebuffer coordinates.
+2255
+                    // Before this step, NDC uses X+ right and Y+ up.
+2256
+                    // The framebuffer uses (0, 0) at the top-left, so numeric y grows down.
+2257
+                    //
+2258
+                    // X does not need a flip:
+2259
+                    //     x_screen = (x_ndc * 0.5f + 0.5f) * width
+2260
+                    //              = x_ndc * half_width + half_width
+2261
+                    //
+2262
+                    // Y must be flipped once when going from NDC to framebuffer space:
+2263
+                    //     y_screen = (1.0f - (y_ndc * 0.5f + 0.5f)) * height
+2264
+                    //              = half_height - y_ndc * half_height
+2265
+                    //
+2266
+                    // Without the Y flip, y_ndc = +1 maps to the bottom row of the framebuffer.
+2267
+                    // With the Y flip, y_ndc = +1 maps to the top row, so objects with larger
+2268
+                    // world/view/NDC Y appear higher on the monitor, which is the intended result.
+                    
+                    */
+                    
+                    // TOOD shouldnt negate x here
                     packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, neg_half_width), half_width);
                     packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, neg_half_height), half_height);
 
