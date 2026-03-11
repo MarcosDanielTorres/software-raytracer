@@ -15,6 +15,15 @@
 // NOTE my depth calculations are done using view space z instead of ndc z. It appears to be better to do it in NDC space
 //   Reverse depth has nothing to do with this, they are orthogonal concepts!
 
+
+// FIX stop all together on SIMD path when camera_eye is 0,0,0 which should work because 
+// the resulting view matrix its just the identity matrix
+
+// FIX sources of whiteness: 
+// 1. I think the model may be too big and its somehow getting in the middle of my view. It happened when i removed the simd and went for the non-simd path
+//      with a huge model too close
+// 2. I dont use all of them i have a blank screen. probably related to when the models come out of screen or something like that i should have a movable camera first
+
 #include "base_core.h"
 #include "base_arena.h"
 #include "base_os.h"
@@ -38,7 +47,7 @@
 #include FT_FREETYPE_H
 #define internal static
 
-#define SIMD 1
+#define SIMD 0
 #ifndef SIMD
     #define SIMD 0  
 #endif
@@ -62,7 +71,7 @@
 #define ROTATION 1
 
 // TODO fix this is not being used when loading the teapot (models)
-#define Y_UP 1
+#define Y_UP 0
 
 // I must also define what a backface or frontface is, is it CCW or CW?. Because in opengl you can do it.
 // glFrontFace(GL_CCW);
@@ -87,6 +96,8 @@
 
 global u32 discarded;
 global u32 vertices_count;
+global u32 cull_triangles;
+global u32 rendered_triangles;
 internal f32 map_range(f32 val, f32 src_range_x, f32 src_range_y, f32 dst_range_x, f32 dst_range_y)
 {
     f32 t = (val - src_range_x) / (src_range_y - src_range_x);
@@ -1329,6 +1340,9 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
     Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    //Vec2F32 s0 = { v0.x + 0.5f, (v0.y) + 0.5f };
+    //Vec2F32 s1 = { (v1.x) + 0.5f, (v1.y) + 0.5f };
+    //Vec2F32 s2 = { (v2.x) + 0.5f, (v2.y) + 0.5f };
     f32 area = edge(s0, s1, s2);          // signed
     #if Y_UP
     if (area < 0.0f) // is CW
@@ -1377,10 +1391,20 @@ internal void barycentric_with_edge_stepping(Params *params)
 
             for (u32 x = min_x; x < max_x; x++)
             {
-                b32 inside =
-                    (e0_inc ? w0 >= 0.f : w0 > eps) &&
-                    (e1_inc ? w1 >= 0.f : w1 > eps) &&
-                    (e2_inc ? w2 >= 0.f : w2 > eps);
+
+
+                    b32 inside_pos =
+    (e0_inc ? w0 >= 0.f : w0 > eps) &&
+    (e1_inc ? w1 >= 0.f : w1 > eps) &&
+    (e2_inc ? w2 >= 0.f : w2 > eps);
+
+//b32 inside_neg =
+//    (e0_inc ? w0 <= 0.f : w0 < -eps) &&
+//    (e1_inc ? w1 <= 0.f : w1 < -eps) &&
+//    (e2_inc ? w2 <= 0.f : w2 < -eps);
+///b32 inside = inside_pos || inside_neg;
+
+                b32 inside = inside_pos;
                 if (inside)
                 {
                     #if 0
@@ -1742,6 +1766,174 @@ struct Game_State
     SIMD_Result result;
 };
 
+
+#if 0
+void provisionary_block()
+{
+    // My idea here is the following. I'm trying to understand how the culling works so I know that if i have a triangle given in CCW
+    // the same exact triangle when looking from the back its going to be seen as CW. So this depends on the view itself.
+    // So I'm planning to make two examples: 
+    //
+    // The first example is going to have just two triangles, with Y+ UP DOWN, NO view and projection matrices, just a viewport transform and CCW means front face.
+    // One triangle is going to be CCW and the other one CW. Because the triangles have 0.5 as z that means that I want to reject all
+    // triangles where its normal is > 0 which mean it would point opposite to the camera (because the camera is through Z = 1)
+    // (The last setence was just an assumption because I'm not dictating the Z range as I dont use view or projection matrices. So its weird for now!)
+    //
+    // The second example is going to use a perspective projection and I will try with the regular projection I'm using `mat4_make_perspective`
+    // and some other projection where Z is inverse. The expectation here is that using the regular projection will work the same, and using
+    // the inverse Z projection works opposite.
+
+
+    // When I used opengl and i didnt want to setup a view or a projetion matrix i would just
+    // define the vertices in NDC space of OpenGL and it would render a triangle. Its the same thing
+    // that happens in learnopengl at the start of the tutorial. 
+    // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
+    // [-1, 1] for both x and y.
+
+    // here are two triangles one is ccw and the other cw
+    // CW is to the left
+    Vec3 cw_v0 = (Vec3) {.x = -0.5, .y = -0.25, .z = 0.5f};
+    Vec3 cw_v1 = (Vec3) {.x = 0.0, .y = -0.25, .z = 0.5f};
+    Vec3 cw_v2 = (Vec3) {.x = -0.25, .y = 0.25, .z = 0.5f};
+    f32 sign_cw = orient_2d((Vec2F32){cw_v0.x, cw_v0.y}, (Vec2F32){cw_v1.x, cw_v1.y}, (Vec2F32){cw_v2.x, cw_v2.y});
+    
+    // CCW is to the right
+    Vec3 ccw_v0 = { 0.0f, 0.0f, 0.5f };
+    Vec3 ccw_v1 = {  0.25f, 0.50f, 0.5f };
+    Vec3 ccw_v2 = {  0.5f,  0.0f, 0.5f };
+    f32 sign_ccw = orient_2d((Vec2F32){ccw_v0.x, ccw_v0.y}, (Vec2F32){ccw_v1.x, ccw_v1.y}, (Vec2F32){ccw_v2.x, ccw_v2.y});
+    {
+        Vec3 v0 = cw_v0;
+        Vec3 v1 = cw_v1;
+        Vec3 v2 = cw_v2;
+        #if 1
+        // It maps from [-1, 1] to [0, width]
+        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+        #if Y_UP
+        // it maps from [-1, 1] to [height, 0]
+        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+        #else
+        // It maps from [-1, 1] to [0, height]
+        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+        #endif
+        #endif
+        {
+        f32 x;
+        f32 y;
+            Vec2F32 s0 = { v0.x, (v0.y) };
+            Vec2F32 s1 = { (v1.x), (v1.y)};
+            Vec2F32 s2 = { (v2.x), (v2.y)};
+            x = orient_2d(s0, s1, s2);
+
+            if(x > 0)
+            {
+                goto next;
+            }
+            y = edge(s0, s1, s2);
+        }
+        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+        min_x = ClampBot(min_x, 0);
+        max_x = ClampTop(max_x, buffer->width);
+        min_y = ClampBot(min_y, 0);
+        max_y = ClampTop(max_y, buffer->height);
+
+        Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+        Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+        Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+        EndTime();
+
+        /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+        Params params = 
+        {
+            view, persp,
+            v0, v1, v2,
+            new_vv0_color, new_vv1_color, new_vv2_color,
+            inv_w0, inv_w1, inv_w2,
+            min_x, max_x, min_y, max_y
+        };
+
+        params.buffer = buffer;
+        params.depth_buffer = depth_buffer;
+        barycentric_with_edge_stepping(&params);
+
+    }
+    {
+        next:
+        Vec3 v0 = ccw_v0;
+        Vec3 v1 = ccw_v1;
+        Vec3 v2 = ccw_v2;
+        #if 1
+        // It maps from [-1, 1] to [0, width]
+        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+        #if Y_UP
+        // it maps from [-1, 1] to [height, 0]
+        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+        #else
+        // It maps from [-1, 1] to [0, height]
+        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+        #endif
+        #endif
+        {
+        f32 x;
+        f32 y;
+            Vec2F32 s0 = { v0.x, (v0.y) };
+            Vec2F32 s1 = { (v1.x), (v1.y)};
+            Vec2F32 s2 = { (v2.x), (v2.y)};
+            x = orient_2d(s0, s1, s2);
+            if (x > 0)
+            {
+                break;
+            }
+            y = edge(s0, s1, s2);
+        }
+        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+        min_x = ClampBot(min_x, 0);
+        max_x = ClampTop(max_x, buffer->width);
+        min_y = ClampBot(min_y, 0);
+        max_y = ClampTop(max_y, buffer->height);
+
+        Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+        Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+        Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+        EndTime();
+
+        /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+        Params params = 
+        {
+            view, persp,
+            v0, v1, v2,
+            new_vv0_color, new_vv1_color, new_vv2_color,
+            inv_w0, inv_w1, inv_w2,
+            min_x, max_x, min_y, max_y
+        };
+
+        params.buffer = buffer;
+        params.depth_buffer = depth_buffer;
+        barycentric_with_edge_stepping(&params);
+
+    }
+
+}
+#endif
+
 global u64 frame_count;
 char frame_time_buf[200];
 UPDATE_AND_RENDER(update_and_render)
@@ -1809,6 +2001,7 @@ UPDATE_AND_RENDER(update_and_render)
         game_state->model_teapot = parse_obj(obj.data, obj.size);
         printf("Loaded: %s, triangle count: %d\n", filename, game_state->model_teapot.face_count);
 
+        // Range of this one is: x [-1 to 1], y: [-1, 1], z: [0, 1]
         filename = ".\\obj\\diablo3_pose\\diablo3_pose.obj";
         obj = os_file_read(arena, filename);
         game_state->model_diablo = parse_obj(obj.data, obj.size);
@@ -1828,14 +2021,15 @@ UPDATE_AND_RENDER(update_and_render)
             u32 entity_count = game_state->entity_count;
             // TODO face_index = 1 of this model references 117 vertex which is not right as 117 > vertex_count and this should be 
             // the contents of the first face: f 1/1/1 62/2/1 61/3/1
-            //entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
+
+
+            // FIX if i dont use all of them i have a blank screen. probably related to when the models come out of screen or something like that i should have a movable camera first
             entities[entity_count++] = (Entity) { .name = "enemy_4", .model_simd = &game_state->model_diablo_simd, .model = &game_state->model_diablo, .position = (Vec3) {2.5, -0.2, 3} }; // should in theory??? be contained between +- 2.303627
+            //entities[entity_count++] = (Entity) { .name = "enemy_2", .model = &game_state->model_f117, .position = (Vec3) {-0.8, 0.3, 2} };
             entities[entity_count++] = (Entity) { .name = "enemy_1", .model_simd = &game_state->model_teapot_simd, .model = &game_state->model_teapot, .position = (Vec3) {3.8, -0.8, 8} };
             entities[entity_count++] = (Entity) { .name = "enemy_3", .model_simd = &game_state->model_african_head_simd, .model = &game_state->model_african_head, .position = (Vec3) {0.5, 0, 3} };
-            // this configuration breaks all the models:
-            // diablo
-            // teapot
-            // african head
+
+
             game_state->entity_count = entity_count;
             printf("Entity count: %d\n", entity_count);
         }
@@ -2034,7 +2228,11 @@ UPDATE_AND_RENDER(update_and_render)
     f32 g_over_aspect = g / aspect;
     // rolled perspective
 
-    Vec3 camera_eye = (Vec3) {0.0, 0.3, 0};
+    // This configuration is the same as the identity matrix after calling
+    // `mat4_look_at(camera_eye, camera_target, (Vec3) {0, 1, 0})`
+    // Vec3 camera_eye = (Vec3) {0.0, 0.0, 0};
+    // Vec3 camera_target = (Vec3) {0.0, 0.0, 1};
+    Vec3 camera_eye = (Vec3) {0.0, 0.3, 0.0};
     Vec3 camera_target = (Vec3) {0.0, 0.0, 1};
     Mat4 view = mat4_look_at(camera_eye, camera_target, (Vec3) {0, 1, 0});
 
@@ -2181,10 +2379,9 @@ UPDATE_AND_RENDER(update_and_render)
                     __m128 packed_y_prime = _mm_loadu_ps(y_prime);
                     __m128 packed_z_prime = _mm_loadu_ps(z_prime);
 
+                    #if 1
                     // World space
-                    
-                        
-                    // rotation
+                    // rotation 
                        // result.x = p.x * c + p.z * s;
                        // result.y = p.y;
                        // result.z = -p.x * s + p.z * c;
@@ -2196,14 +2393,16 @@ UPDATE_AND_RENDER(update_and_render)
                     packed_z_prime = aux_packed_z_prime;
                     // rotation
                     
-
+                    // Scaling
                     packed_x_prime = _mm_mul_ps(packed_x_prime, scalar);
                     packed_y_prime = _mm_mul_ps(packed_y_prime, scalar);
                     packed_z_prime = _mm_mul_ps(packed_z_prime, scalar);
 
+                    // Translation
                     packed_x_prime = _mm_add_ps(packed_x_prime, x_translation);
                     packed_y_prime = _mm_add_ps(packed_y_prime, y_translation);
                     packed_z_prime = _mm_add_ps(packed_z_prime, z_translation);
+                    #endif
 
 
                     // view matrix
@@ -2262,8 +2461,9 @@ UPDATE_AND_RENDER(update_and_render)
                     //     after reordering: v.x = v.x * buffer->width / 2 + buffer->width / 2
                     //     or: v.x = v.x * half_width + half_width
                     //     same for v.y
-                    // packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
-                    // packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, half_height), half_height);
+                    // come here
+                    //packed_x_prime = _mm_add_ps(_mm_mul_ps(packed_x_prime, half_width), half_width);
+                    //packed_y_prime = _mm_add_ps(_mm_mul_ps(packed_y_prime, half_height), half_height);
 
                     // For Y up:
                     //     v.x = (1.0f - (v.x * 0.5f + 0.5f)) * buffer->width;
@@ -2370,8 +2570,8 @@ UPDATE_AND_RENDER(update_and_render)
     {
         #if 1
         {
-            //for (u32 entity = 0; entity < entity_count; entity++)
-            for (u32 entity = 0; entity < 1; entity++)
+            for (u32 entity = 0; entity < game_state->entity_count; entity++)
+            //for (u32 entity = 0; entity < 1; entity++)
             {
                 Entity* e = game_state->entities + entity;
                 Obj_Model *model = e->model;
@@ -2395,19 +2595,21 @@ UPDATE_AND_RENDER(update_and_render)
                             }
 
 
+                            #if 1
+                            // World space
                             #if ROTATION
-                            //if(model == &model_f117)
-                            //{
+                            if(model == &game_state->model_f117)
+                            {
 
-                            //    v0 = vec3_rotate_z(v0, c_90, s_90);
-                            //    v1 = vec3_rotate_z(v1, c_90, s_90);
-                            //    v2 = vec3_rotate_z(v2, c_90, s_90);
+                                v0 = vec3_rotate_z(v0, c_90, s_90);
+                                v1 = vec3_rotate_z(v1, c_90, s_90);
+                                v2 = vec3_rotate_z(v2, c_90, s_90);
 
-                            //    v0 = vec3_rotate_y(v0, c, s);
-                            //    v1 = vec3_rotate_y(v1, c, s);
-                            //    v2 = vec3_rotate_y(v2, c, s);
-                            //}
-                            //else
+                                v0 = vec3_rotate_y(v0, c, s);
+                                v1 = vec3_rotate_y(v1, c, s);
+                                v2 = vec3_rotate_y(v2, c, s);
+                            }
+                            else
                             {
                                 v0 = vec3_rotate_y(v0, c, s);
                                 v1 = vec3_rotate_y(v1, c, s);
@@ -2415,7 +2617,6 @@ UPDATE_AND_RENDER(update_and_render)
                             }
                             #endif
                             
-                            // World space
                             v0 = vec3_scalar(v0, 0.5f);
                             v1 = vec3_scalar(v1, 0.5f);
                             v2 = vec3_scalar(v2, 0.5f);
@@ -2431,7 +2632,9 @@ UPDATE_AND_RENDER(update_and_render)
                             v2.x += e->position.x;
                             v2.y += e->position.y;
                             v2.z += e->position.z;
+                            #endif
                             
+                            #if 1
                             // view space
                             Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
                             Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
@@ -2440,12 +2643,14 @@ UPDATE_AND_RENDER(update_and_render)
                             Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
                             Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
 
+                            #if 1
                             f32 inv_w0;
                             f32 inv_w1;
                             f32 inv_w2;
                             // remember that the projection matrix stores de viewspace z value in its w
-                            // but the result vector is in clip space so z is in clip space, not in 
+                            // but the result vector is in clip space so z of the view matrix is in clip space, not in 
                             // viewspace, they are not the same zz
+                            //  The near plane of the perspective matrix is 1 and the far plane is 50
                             transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
                             transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
                             transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
@@ -2473,6 +2678,7 @@ UPDATE_AND_RENDER(update_and_render)
                                 transformed_v2.y *= inv_w2;
                                 transformed_v2.z *= inv_w2;
                             }
+                            #endif
 
                             v0.x = transformed_v0.x;
                             v0.y = transformed_v0.y;
@@ -2487,48 +2693,114 @@ UPDATE_AND_RENDER(update_and_render)
                             v2.z = transformed_v2.z;
 
 
-                            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-                            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-                            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-                            #if Y_UP
-                            v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
-                            v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
-                            v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
-                            #else
-                            v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
-                            v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
-                            v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+                            f32 x;
+                            f32 y;
+                            {
+                                Vec2F32 s0 = { v0.x, (v0.y) };
+                                Vec2F32 s1 = { (v1.x), (v1.y)};
+                                Vec2F32 s2 = { (v2.x), (v2.y)};
+                                x = orient_2d(s0, s1, s2);
+                                y = edge(s0, s1, s2);
+                                if (entity == 0)
+                                {
+                                    if (x > 0)
+                                    {
+                                        cull_triangles++;
+                                        //continue;
+                                    }
+                                    rendered_triangles++;
+                                }
+                                if (entity == 1)
+                                {
+                                    if (x > 0)
+                                    {
+                                        cull_triangles++;
+                                        //continue;
+                                    }
+                                    rendered_triangles++;
+                                }
+                                if (entity == 2)
+                                {
+                                    if (x > 0)
+                                    {
+                                        cull_triangles++;
+                                        //continue;
+                                    }
+                                    rendered_triangles++;
+                                }
+                                if (entity == 3)
+                                {
+                                    if (x > 0)
+                                    {
+                                        cull_triangles++;
+                                        //continue;
+                                    }
+                                    rendered_triangles++;
+                                }
+                            }
                             #endif
 
-                            f32 min_x = Min(Min(v0.x, v1.x), v2.x);
-                            f32 min_y = Min(Min(v0.y, v1.y), v2.y);
-                            f32 max_x = Max(Max(v0.x, v1.x), v2.x);
-                            f32 max_y = Max(Max(v0.y, v1.y), v2.y);
-                            min_x = ClampBot(min_x, 0);
-                            max_x = ClampTop(max_x, buffer->width);
-                            min_y = ClampBot(min_y, 0);
-                            max_y = ClampTop(max_y, buffer->height);
-
-                            Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
-                            Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
-                            Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
-                            EndTime();
-
-                            /////draw_triangle__scanline(buffer, v0, v1, v2, color);
-                            Params params = 
                             {
-                                view, persp,
-                                v0, v1, v2,
-                                new_vv0_color, new_vv1_color, new_vv2_color,
-                                inv_w0, inv_w1, inv_w2,
-                                min_x, max_x, min_y, max_y
-                            };
+                                #if 1
+                                // It maps from [-1, 1] to [0, width]
+                                v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+                                v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+                                v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+                                #if Y_UP
+                                // it maps from [-1, 1] to [height, 0]
+                                v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
+                                v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
+                                v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
+                                #else
+                                // It maps from [-1, 1] to [0, height]
+                                v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
+                                v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
+                                v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
+                                #endif
+                                #endif
+                                {
+                                f32 x;
+                                f32 y;
+                                    Vec2F32 s0 = { v0.x, (v0.y) };
+                                    Vec2F32 s1 = { (v1.x), (v1.y)};
+                                    Vec2F32 s2 = { (v2.x), (v2.y)};
+                                    x = orient_2d(s0, s1, s2);
 
-                            params.buffer = buffer;
-                            params.depth_buffer = depth_buffer;
-                            barycentric_with_edge_stepping(&params);
-                            //olivec_params(&params);
-                            //naive()
+                                    if(x > 0)
+                                    {
+                                    }
+                                    y = edge(s0, s1, s2);
+                                }
+                                f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+                                f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+                                f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+                                f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+                                min_x = ClampBot(min_x, 0);
+                                max_x = ClampTop(max_x, buffer->width);
+                                min_y = ClampBot(min_y, 0);
+                                max_y = ClampTop(max_y, buffer->height);
+
+                                Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
+                                Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
+                                Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
+                                EndTime();
+
+                                /////draw_triangle__scanline(buffer, v0, v1, v2, color);
+                                Params params = 
+                                {
+                                    view, persp,
+                                    v0, v1, v2,
+                                    new_vv0_color, new_vv1_color, new_vv2_color,
+                                    inv_w0, inv_w1, inv_w2,
+                                    min_x, max_x, min_y, max_y
+                                };
+
+                                params.buffer = buffer;
+                                params.depth_buffer = depth_buffer;
+                                barycentric_with_edge_stepping(&params);
+                                //olivec_params(&params);
+                                //naive()
+                            }
                         }
                     }
                 }
@@ -2920,6 +3192,11 @@ UPDATE_AND_RENDER(update_and_render)
     }
     
     //printf("per frame time: %.2fms\n", timer_os_time_to_ms(result));
+    printf("culled triangles for entity diablo: %d\n", cull_triangles);
+    printf("rendered triangles for entity diablo: %d\n", rendered_triangles);
+    printf("total triangles for entity diablo: %d\n", game_state->entities[0].model->face_count);
     vertices_count = 0;
+    cull_triangles = 0;
+    rendered_triangles = 0;
     frame_count++;
 }
