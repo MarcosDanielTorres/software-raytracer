@@ -1,3 +1,4 @@
+#include "base_os.h"
 internal OS_FileReadResult os_file_read(Arena *arena, const char *filename)
 {
     OS_FileReadResult result = {0};
@@ -32,6 +33,9 @@ win32_filetime_to_u64(FILETIME time)
     return ((u64)time.dwHighDateTime << 32) | time.dwLowDateTime;
 }
 
+// TODO dont like the name of this because its tighly couple to the implmentation. Is not a generic load of a DLL. Which maybe it shouldnt be
+// I think i could have a load dll function but there must be a different load-specifc_case dll to account for other things
+// probably its best to remove this function from the os layer!
 internal void
 os_load_dll(OS_LoadedDLL *dll)
 {
@@ -79,6 +83,16 @@ os_unload_dll(OS_LoadedDLL *dll)
     dll->handle.U64 = 0;
     dll->app_update_and_render = 0;
     dll->is_valid = 0;
+}
+
+internal OS_LoadedDLL
+os_create_dll(Arena *arena, u8* dll_name)
+{
+    OS_LoadedDLL result_dll = {0};
+    result_dll.name = cstring_concat(arena, dll_name, ".dll");
+    result_dll.name_temp = cstring_concat(arena, dll_name, "-temp.dll");
+    result_dll.lock_filename = cstring_concat(arena, dll_name, "-lock.temp");
+    return result_dll;
 }
 
 internal void

@@ -2,17 +2,18 @@
 //  Try to use dx11 for presentation to see if the time lowers
 #include "base_core.h"
 #include "base_arena.h"
+#include "base_string.h"
 #include "base_os.h"
 #include "os_win32.h"
 #include "timer.h"
 #include "base_arena.c"
+#include "base_string.c"
 #include "os_win32.c"
 #include "timer.c"
 
-#include "base_string.h"
 
-#include "base_string.c"
 #include "winnt.h"
+#include "main.h"
 
 global Arena *arena;
 
@@ -222,14 +223,16 @@ int main ()
         absolute_path = str8_strip_last(absolute_path, str8_literal("\\"));
     }
 
-    u8* dll_name = cstring_from_str8(arena, str8_concat(arena, absolute_path, str8_literal("\\game")));
 
-    OS_LoadedDLL game_dll = {0};
-    game_dll.name = cstring_concat(arena, dll_name, ".dll");
-    game_dll.name_temp = cstring_concat(arena, dll_name, "-temp.dll");
-    game_dll.lock_filename = cstring_concat(arena, dll_name, "-lock.temp");
-
-    os_load_dll(&game_dll);
+    #if defined(TEST_SUITE)
+    u8* dll_game_name = cstring_from_str8(arena, str8_concat(arena, absolute_path, str8_literal("\\test")));
+    OS_LoadedDLL loaded_dll = os_create_dll(arena, dll_game_name);
+    os_load_dll(&loaded_dll);
+    #else
+    u8* dll_game_name = cstring_from_str8(arena, str8_concat(arena, absolute_path, str8_literal("\\game")));
+    OS_LoadedDLL loaded_dll = os_create_dll(arena, dll_game_name);
+    os_load_dll(&loaded_dll);
+    #endif
 
     LONGLONG last_time = timer_get_os_time();
     LONGLONG total_time = 0;
@@ -242,8 +245,8 @@ int main ()
         //printf("Game loop: %.2fms\n", timer_os_time_to_ms(dt));
         win32_process_pending_msgs();
 
-        os_perform_hot_reload(&game_dll);
-        game_dll.app_update_and_render(buffer, depth_buffer, &memory, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
+        os_perform_hot_reload(&loaded_dll);
+        loaded_dll.app_update_and_render(buffer, depth_buffer, &memory, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
 
         //LONGLONG stretch_now = timer_get_os_time();
