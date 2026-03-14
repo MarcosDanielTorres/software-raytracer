@@ -391,7 +391,7 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         if(sign_area > 0)
         {
             // culling
-            //continue;
+            continue;
         }
 
         ////// viewport transform //////
@@ -469,11 +469,21 @@ FontGlyph font_load_glyph(FT_Face face, char codepoint, FontInfo *info) {
     return result;
 }
 
+typedef struct Camera Camera;
+struct Camera
+{
+    Vec3 position;
+    Vec3 forward;
+    f32 pitch;
+    f32 yaw;
+};
+
 typedef struct Game_State Game_State;
 struct Game_State
 {
     Arena *arena;
     FontInfo font_info;
+    Camera camera;
 };
 
 UPDATE_AND_RENDER(update_and_render)
@@ -531,8 +541,13 @@ UPDATE_AND_RENDER(update_and_render)
                 }
             }
         }
+
+
+        game_state->camera.position = (Vec3) {0.0, 0.0, 0.0};
+        game_state->camera.forward = (Vec3) {0, 0, 1};
         game_memory->init = 1;
     }
+    LONGLONG frame_time_now = timer_get_os_time();
     u32 steam_chat_background_color = 0xff1e2025;
     clear_screen(buffer, steam_chat_background_color);
     clear_depth_buffer(depth_buffer);
@@ -557,7 +572,7 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 1;
+    u32 example = 3;
     if(example == 1)
     {
         // Example 1
@@ -615,7 +630,7 @@ UPDATE_AND_RENDER(update_and_render)
 
         f32 fov = 3.141592 / 3.0; // 60 deg
         f32 aspect = (f32)buffer->width / (f32)buffer->height;
-        f32 znear = 1.0f;
+        f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
@@ -625,9 +640,9 @@ UPDATE_AND_RENDER(update_and_render)
         // Example 3
         // This could be like example 1 with a camera... seems good right?
         Triangle cw_tri = {
-            .v0 = (Vec3) { -0.5, -0.25, 0.5f},
-            .v1 = (Vec3) { 0.0, -0.25, 0.5f},
-            .v2 = (Vec3) { -0.25, 0.25, 0.5f},
+            .v0 = (Vec3) { -0.5, -0.25, 5.5f},
+            .v1 = (Vec3) { 0.0, -0.25, 5.5f},
+            .v2 = (Vec3) { -0.25, 0.25, 5.5f},
             .text = str8_literal("CW"),
         };
         f32 sign_cw = orient_2d_v3(cw_tri.v0, cw_tri.v1, cw_tri.v2);
@@ -635,24 +650,67 @@ UPDATE_AND_RENDER(update_and_render)
         
         // This is CCW and is to the right
         Triangle ccw_tri = {
-            .v0 = (Vec3) { 0.0f, 0.0f, 0.5f },
-            .v1 = (Vec3) { 0.25f, 0.50f, 0.5f },
-            .v2 = (Vec3) { 0.5f,  0.0f, 0.5f },
+            .v0 = (Vec3) { 0.0f, 0.0f, 5.5f },
+            .v1 = (Vec3) { 0.25f, 0.50f, 5.5f },
+            .v2 = (Vec3) { 0.5f,  0.0f, 5.5f },
             .text = str8_literal("CCW"),
         };
         f32 sign_ccw = orient_2d_v3(ccw_tri.v0, ccw_tri.v1, ccw_tri.v2);
         ccw_tri.sign_area = sign_ccw;
         Triangle triangles[2] = {cw_tri, ccw_tri};
-        Mat4 view = mat4_identity();
+
+        f32 speed = 4;
+        if(input_is_key_pressed(input, Keys_W))
+        {
+            Vec3 forward = vec3_scalar(game_state->camera.forward, speed * dt);
+            game_state->camera.position = vec3_add(game_state->camera.position, forward);
+        }
+        if(input_is_key_pressed(input, Keys_S))
+        {
+
+        }
+        if(input_is_key_pressed(input, Keys_A))
+        {
+
+        }
+        if(input_is_key_pressed(input, Keys_D))
+        {
+
+        }
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        //view = mat4_identity();
         f32 fov = 3.141592 / 3.0; // 60 deg
         f32 aspect = (f32)buffer->width / (f32)buffer->height;
-        f32 znear = 1.0f;
+        f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
+
     }
 
     char buf[200];
     snprintf(buf, 200, "Running example: %d", example);
     draw_text(buffer, 4, 20, buf);
+    {
+        LONGLONG frame_time = timer_get_os_time() - frame_time_now;
+        char buf[200];
+        snprintf(buf, 200, "frame time: %.2fms", timer_os_time_to_ms(frame_time));
+        draw_text(buffer, 4, 35, buf);
+    }
+
+    {
+        // mouse
+        f32 mouse_x = input->curr_mouse_state.x;
+        f32 mouse_y = input->curr_mouse_state.y;
+        char buf[200];
+        snprintf(buf, 200, "Mouse position: (%.2f %.2f)", mouse_x, mouse_y);
+        draw_text(buffer, 4, 50, buf);
+    }
+    {
+        // camera
+        Camera camera = game_state->camera;
+        char buf[200];
+        snprintf(buf, 200, "Camera position: (%.2f, %.2f, %.2f)", camera.position.x, camera.position.y, camera.position.z);
+        draw_text(buffer, 4, 65, buf);
+    }
 }

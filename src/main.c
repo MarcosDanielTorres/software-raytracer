@@ -80,7 +80,7 @@ void win32_process_pending_msgs(Game_Input *input)
 
             } break;
             #endif
-                        case WM_SYSKEYDOWN:
+            case WM_SYSKEYDOWN:
             case WM_SYSKEYUP:
             case WM_KEYDOWN:
             case WM_KEYUP:
