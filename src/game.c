@@ -293,78 +293,6 @@ struct Obj_Model_SIMD
     u32 padded_vertex_count;
 };
 
-typedef struct Vec2F32 Vec2F32;
-struct Vec2F32
-{
-    f32 x;
-    f32 y;
-};
-
-inline f32 dot(Vec2F32 a, Vec2F32 b)
-{
-    return a.x * b.x + a.y * b.y;
-}
-
-inline f32 dotvp(Vec3 a, Vec3 b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-inline f32 len_sq(Vec2F32 a)
-{
-    return dot(a, a);
-}
-
-inline f32 len(Vec2F32 a)
-{
-    return sqrtf(dot(a, a));
-}
-
-inline Vec2F32 norm(Vec2F32 a)
-{
-    f32 vlen = len(a);
-    if (fabsf(vlen) < 0.0001)
-    {
-        return (Vec2F32){0};
-    }
-    Vec2F32 result = {a.x * 1.0f / vlen, a.y * 1.0f / vlen};
-    return result;
-}
-
-inline Vec2F32 vec_sub(Vec2F32 a, Vec2F32 b)
-{
-    return (Vec2F32) {a.x - b.x, a.y - b.y};
-}
-
-inline Vec2F32 vec_add(Vec2F32 a, Vec2F32 b)
-{
-    return (Vec2F32) {a.x + b.x, a.y + b.y};
-}
-
-inline Vec2F32 vec_scalar(Vec2F32 b, f32 s)
-{
-    return (Vec2F32) {s * b.x, s * b.y};
-}
-
-inline void vec2f32_compare_and_swap_x(Vec2F32 *a, Vec2F32 *b)
-{
-    if (a->x > b->x)
-    {
-        Vec2F32 temp = *a;
-        *a = *b;
-        *b = temp;
-    }
-}
-
-inline void vec2f32_compare_and_swap(Vec2F32 *a, Vec2F32 *b)
-{
-    if (a->y > b->y)
-    {
-        Vec2F32 temp = *a;
-        *a = *b;
-        *b = temp;
-    }
-}
 
 void scanline_bottom_flat(Software_Render_Buffer *buffer, Vec2F32 A, Vec2F32 B, Vec2F32 C, u32 c)
 {
@@ -693,12 +621,6 @@ static inline b32 olivec_barycentric(int x1, int y1, int x2, int y2, int x3, int
                (Sign(int, *u2) == Sign(int, *det) || *u2 == 0) &&
                (Sign(int, u3) == Sign(int, *det) || u3 == 0)
            );
-}
-
-internal f32 orient_2d(Vec2F32 a, Vec2F32 b, Vec2F32 c)
-{
-    // AB x CA
-    return ((b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)); // 
 }
 
 // i should remove this function here and just stick with orient_2d as it seems is the normal function defined for right handed coordinates
@@ -1725,6 +1647,7 @@ typedef struct Game_State Game_State;
 struct Game_State
 {
     Arena *arena;
+    FontInfo font_info;
     Obj_Model model_african_head;
     Obj_Model_SIMD model_african_head_simd;
     Obj_Model model_teapot;
@@ -1737,179 +1660,12 @@ struct Game_State
     SIMD_Result result;
 };
 
-
-#if 0
-void provisionary_block()
-{
-    // My idea here is the following. I'm trying to understand how the culling works so I know that if i have a triangle given in CCW
-    // the same exact triangle when looking from the back its going to be seen as CW. So this depends on the view itself.
-    // So I'm planning to make two examples: 
-    //
-    // The first example is going to have just two triangles, with Y+ UP DOWN, NO view and projection matrices, just a viewport transform and CCW means front face.
-    // One triangle is going to be CCW and the other one CW. Because the triangles have 0.5 as z that means that I want to reject all
-    // triangles where its normal is > 0 which mean it would point opposite to the camera (because the camera is through Z = 1)
-    // (The last setence was just an assumption because I'm not dictating the Z range as I dont use view or projection matrices. So its weird for now!)
-    //
-    // The second example is going to use a perspective projection and I will try with the regular projection I'm using `mat4_make_perspective`
-    // and some other projection where Z is inverse. The expectation here is that using the regular projection will work the same, and using
-    // the inverse Z projection works opposite.
-
-
-    // When I used opengl and i didnt want to setup a view or a projetion matrix i would just
-    // define the vertices in NDC space of OpenGL and it would render a triangle. Its the same thing
-    // that happens in learnopengl at the start of the tutorial. 
-    // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
-    // [-1, 1] for both x and y.
-
-    // here are two triangles one is ccw and the other cw
-    // CW is to the left
-    Vec3 cw_v0 = (Vec3) {.x = -0.5, .y = -0.25, .z = 0.5f};
-    Vec3 cw_v1 = (Vec3) {.x = 0.0, .y = -0.25, .z = 0.5f};
-    Vec3 cw_v2 = (Vec3) {.x = -0.25, .y = 0.25, .z = 0.5f};
-    f32 sign_cw = orient_2d((Vec2F32){cw_v0.x, cw_v0.y}, (Vec2F32){cw_v1.x, cw_v1.y}, (Vec2F32){cw_v2.x, cw_v2.y});
-    
-    // CCW is to the right
-    Vec3 ccw_v0 = { 0.0f, 0.0f, 0.5f };
-    Vec3 ccw_v1 = {  0.25f, 0.50f, 0.5f };
-    Vec3 ccw_v2 = {  0.5f,  0.0f, 0.5f };
-    f32 sign_ccw = orient_2d((Vec2F32){ccw_v0.x, ccw_v0.y}, (Vec2F32){ccw_v1.x, ccw_v1.y}, (Vec2F32){ccw_v2.x, ccw_v2.y});
-    {
-        Vec3 v0 = cw_v0;
-        Vec3 v1 = cw_v1;
-        Vec3 v2 = cw_v2;
-        #if 1
-        // It maps from [-1, 1] to [0, width]
-        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-        #if Y_UP
-        // it maps from [-1, 1] to [height, 0]
-        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
-        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
-        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
-        #else
-        // It maps from [-1, 1] to [0, height]
-        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
-        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
-        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
-        #endif
-        #endif
-        {
-        f32 x;
-        f32 y;
-            Vec2F32 s0 = { v0.x, (v0.y) };
-            Vec2F32 s1 = { (v1.x), (v1.y)};
-            Vec2F32 s2 = { (v2.x), (v2.y)};
-            x = orient_2d(s0, s1, s2);
-
-            if(x > 0)
-            {
-                goto next;
-            }
-            y = edge(s0, s1, s2);
-        }
-        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
-        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
-        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
-        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
-        min_x = ClampBot(min_x, 0);
-        max_x = ClampTop(max_x, buffer->width);
-        min_y = ClampBot(min_y, 0);
-        max_y = ClampTop(max_y, buffer->height);
-
-        Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
-        Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
-        Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
-        EndTime();
-
-        /////draw_triangle__scanline(buffer, v0, v1, v2, color);
-        Params params = 
-        {
-            view, persp,
-            v0, v1, v2,
-            new_vv0_color, new_vv1_color, new_vv2_color,
-            inv_w0, inv_w1, inv_w2,
-            min_x, max_x, min_y, max_y
-        };
-
-        params.buffer = buffer;
-        params.depth_buffer = depth_buffer;
-        barycentric_with_edge_stepping(&params);
-
-    }
-    {
-        next:
-        Vec3 v0 = ccw_v0;
-        Vec3 v1 = ccw_v1;
-        Vec3 v2 = ccw_v2;
-        #if 1
-        // It maps from [-1, 1] to [0, width]
-        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-        #if Y_UP
-        // it maps from [-1, 1] to [height, 0]
-        v0.y = (1.0f - (v0.y * 0.5f + 0.5f)) * buffer->height;
-        v1.y = (1.0f - (v1.y * 0.5f + 0.5f)) * buffer->height;
-        v2.y = (1.0f - (v2.y * 0.5f + 0.5f)) * buffer->height;
-        #else
-        // It maps from [-1, 1] to [0, height]
-        v0.y = ((v0.y * 0.5f + 0.5f)) * buffer->height;
-        v1.y = ((v1.y * 0.5f + 0.5f)) * buffer->height;
-        v2.y = ((v2.y * 0.5f + 0.5f)) * buffer->height;
-        #endif
-        #endif
-        {
-        f32 x;
-        f32 y;
-            Vec2F32 s0 = { v0.x, (v0.y) };
-            Vec2F32 s1 = { (v1.x), (v1.y)};
-            Vec2F32 s2 = { (v2.x), (v2.y)};
-            x = orient_2d(s0, s1, s2);
-            if (x > 0)
-            {
-                break;
-            }
-            y = edge(s0, s1, s2);
-        }
-        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
-        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
-        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
-        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
-        min_x = ClampBot(min_x, 0);
-        max_x = ClampTop(max_x, buffer->width);
-        min_y = ClampBot(min_y, 0);
-        max_y = ClampTop(max_y, buffer->height);
-
-        Vec3 new_vv0_color = vec3_scalar(vv0_color, inv_w0);
-        Vec3 new_vv1_color = vec3_scalar(vv1_color, inv_w1);
-        Vec3 new_vv2_color = vec3_scalar(vv2_color, inv_w2);
-        EndTime();
-
-        /////draw_triangle__scanline(buffer, v0, v1, v2, color);
-        Params params = 
-        {
-            view, persp,
-            v0, v1, v2,
-            new_vv0_color, new_vv1_color, new_vv2_color,
-            inv_w0, inv_w1, inv_w2,
-            min_x, max_x, min_y, max_y
-        };
-
-        params.buffer = buffer;
-        params.depth_buffer = depth_buffer;
-        barycentric_with_edge_stepping(&params);
-
-    }
-
-}
-#endif
-
 global u64 frame_count;
 char frame_time_buf[200];
 UPDATE_AND_RENDER(update_and_render)
 {
     Game_State *game_state = (Game_State*)game_memory->persistent_memory;
+    font_info = game_state->font_info;
     if(!game_memory->init)
     {
         printf("init\n");
@@ -1949,15 +1705,15 @@ UPDATE_AND_RENDER(update_and_render)
                 FT_Error set_char_size_err = FT_Set_Char_Size(face, 4 * 64, 4 * 64, 300, 300);
                 FT_Error set_char_size_erra = FT_Set_Pixel_Sizes(face, 0, 10);
                 
-                font_info.ascent = face->size->metrics.ascender >> 6;
-                font_info.descent = - (face->size->metrics.descender >> 6); 
-                font_info.line_height = face->size->metrics.height >> 6;
+                game_state->font_info.ascent = face->size->metrics.ascender >> 6;
+                game_state->font_info.descent = - (face->size->metrics.descender >> 6); 
+                game_state->font_info.line_height = face->size->metrics.height >> 6;
 
                 {
                     for(u32 codepoint = '!'; codepoint <= '~'; codepoint++) {
-                        font_info.font_table[(u32)codepoint] = font_load_glyph(face, (char)codepoint, &font_info);
+                        game_state->font_info.font_table[(u32)codepoint] = font_load_glyph(face, (char)codepoint, &game_state->font_info);
                     }
-                    font_info.font_table[(u32)(' ')] = font_load_glyph(face, (char)(' '), &font_info);
+                    game_state->font_info.font_table[(u32)(' ')] = font_load_glyph(face, (char)(' '), &game_state->font_info);
                 }
             }
         }
@@ -3159,6 +2915,12 @@ UPDATE_AND_RENDER(update_and_render)
         char buf[300];
         snprintf(buf, 300, "frame count: %lld\n", frame_count);
         draw_text(buffer, 30, 4, buf);
+        #if SIMD
+
+        draw_text(buffer, 20, 4, "Render mode: SIMD");
+        #else
+        draw_text(buffer, 20, 4, "Render mode: normal");
+        #endif
         //draw_rectangle(buffer, 120, 200, 10, 10, 0xFFFF0000);
     }
     

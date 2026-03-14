@@ -7,6 +7,7 @@ struct OS_Handle
 
 typedef struct Software_Render_Buffer Software_Render_Buffer;
 typedef struct Software_Depth_Buffer Software_Depth_Buffer;
+typedef struct Game_Input Game_Input;
 typedef struct Game_Memory Game_Memory;
 struct Game_Memory
 {
@@ -17,7 +18,7 @@ struct Game_Memory
     u64 transient_memory_size;
 };
 
-#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Game_Memory *game_memory, f32 total_time, f32 dt)
+#define UPDATE_AND_RENDER(name) void name(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Game_Memory *game_memory, Game_Input *input, f32 total_time, f32 dt)
 typedef UPDATE_AND_RENDER(Update_And_Render);
 UPDATE_AND_RENDER(update_and_render_stub)
 {

@@ -4,6 +4,7 @@
 #include "base_arena.h"
 #include "base_string.h"
 #include "base_os.h"
+#include "input.h"
 #include "os_win32.h"
 #include "timer.h"
 #include "base_arena.c"
@@ -43,14 +44,13 @@ LRESULT MainWndProc(
         {
             g_running = 0;
         } break;
- 
         default: 
             return DefWindowProc(hwnd, uMsg, wParam, lParam); 
     } 
     return 0; 
 }
 
-void win32_process_pending_msgs() 
+void win32_process_pending_msgs(Game_Input *input) 
 {
     MSG Message;
     while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
@@ -80,6 +80,128 @@ void win32_process_pending_msgs()
 
             } break;
             #endif
+                        case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+            case WM_KEYDOWN:
+            case WM_KEYUP:
+            {
+                WPARAM wparam = Message.wParam;
+                LPARAM lparam = Message.lParam;
+
+                u32 key = (u32)wparam;
+                u32 alt_key_is_pressed = (lparam & (1 << 29)) != 0;
+                u32 was_pressed = (lparam & (1 << 30)) != 0;
+                u32 is_pressed = (lparam & (1 << 31)) == 0;
+                input->curr_keyboard_state.keys[key] = (u8)(is_pressed);
+                input->prev_keyboard_state.keys[key] = (u8)(was_pressed);
+                #if 0
+                if (GetKeyState(VK_SHIFT) & (1 << 15)) {
+                    os_modifiers |= OS_Modifiers_Shift;
+                }
+                // NOTE reason behin this is that every key will be an event and each event knows what are the modifiers pressed when they key was processed
+                // It the key is a modifier as well then the modifiers of this key wont containt itself. Meaning if i press Shift and i consult the modifiers pressed
+                // for this key, shift will not be set
+                if (GetKeyState(VK_CONTROL) & (1 << 15)) {
+                    os_modifiers |= OS_Modifiers_Ctrl;
+                }
+                if (GetKeyState(VK_MENU) & (1 << 15)) {
+                    os_modifiers |= OS_Modifiers_Alt;
+                }
+                if (key == Keys_Shift && os_modifiers & OS_Modifiers_Shift) {
+                    os_modifiers &= ~OS_Modifiers_Shift;
+                }
+                if (key == Keys_Control && os_modifiers & OS_Modifiers_Ctrl) {
+                    os_modifiers &= ~OS_Modifiers_Ctrl;
+                }
+                if (key == Keys_Alt && os_modifiers & OS_Modifiers_Alt) {
+                    os_modifiers &= ~OS_Modifiers_Alt;
+                }
+                #endif
+            } break;
+
+            case WM_MOUSEMOVE:
+            {
+                i32 xPos = (Message.lParam & 0x0000FFFF); 
+                i32 yPos = ((Message.lParam & 0xFFFF0000) >> 16); 
+                //if(xPos >= 0 && xPos < SRC_WIDTH && yPos >= 0 && yPos < SRC_HEIGHT)
+                //{
+                //}
+                // comente esto
+                //SetCapture(global_w32_window.handle);
+
+                i32 xxPos = LOWORD(Message.lParam);
+                i32 yyPos = HIWORD(Message.lParam);
+                char buf[100];
+                sprintf(buf,  "MOUSE MOVE: x: %d, y: %d\n", xPos, yPos);
+                //printf(buf);
+
+                //assert((xxPos == xPos && yyPos == yPos));
+                input->curr_mouse_state.x = xPos;
+                input->curr_mouse_state.y = yPos;
+                
+                #if !defined(RAW_INPUT)
+                input->dx = input->curr_mouse_state.x - input->prev_mouse_state.x;
+                input->dy = -(input->curr_mouse_state.y - input->prev_mouse_state.y);
+                #endif
+
+            }
+            break;
+            #if RAW_INPUT
+            case WM_INPUT: {
+                UINT size;
+                GetRawInputData((HRAWINPUT)Message.lParam, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER));
+
+                AssertGui(size < 1000, "GetRawInputData surpassed 1000 bytes");
+                u8 bytes[1000];
+                RAWINPUT* raw = (RAWINPUT*)bytes;
+                GetRawInputData((HRAWINPUT)Message.lParam, RID_INPUT, raw, &size, sizeof(RAWINPUTHEADER));
+                if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+                {
+                    if (raw->header.dwType == RIM_TYPEMOUSE) 
+                    {
+                        LONG dx = raw->data.mouse.lLastX;
+                        LONG dy = raw->data.mouse.lLastY;
+                        input->dx = f32(dx);
+                        input->dy = f32(-dy);
+                    }
+                }else
+                {
+                    AssertGui(1 < 0, "MOUSE_MOVE_ABSOLUTE");
+                }
+                POINT center = { LONG(SRC_WIDTH)/2, LONG(SRC_HEIGHT)/2 };
+                ClientToScreen(global_w32_window.handle, &center);
+                SetCursorPos(center.x, center.y);
+                //printf("RECENTERING!!!\n");
+
+            } break;
+            #endif
+            case WM_LBUTTONUP:
+            {
+                input->curr_mouse_state.button[MouseButtons_LeftClick] = 0;
+
+            } break;
+            case WM_MBUTTONUP:
+            {
+                input->curr_mouse_state.button[MouseButtons_MiddleClick] = 0;
+            } break;
+            case WM_RBUTTONUP:
+            {
+                input->curr_mouse_state.button[MouseButtons_RightClick] = 0;
+            } break;
+
+            case WM_LBUTTONDOWN:
+            {
+                input->curr_mouse_state.button[MouseButtons_LeftClick] = 1;
+
+            } break;
+            case WM_MBUTTONDOWN:
+            {
+                input->curr_mouse_state.button[MouseButtons_MiddleClick] = 1;
+            } break;
+            case WM_RBUTTONDOWN:
+            {
+                input->curr_mouse_state.button[MouseButtons_RightClick] = 1;
+            } break;
             default:
             {
                 DispatchMessageA(&Message);
@@ -211,6 +333,8 @@ int main ()
     memory.persistent_memory = VirtualAlloc(0, memory.persistent_memory_size + memory.transient_memory_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     memory.transient_memory = (u8*)memory.persistent_memory + memory.persistent_memory_size;
 
+    Game_Input input = {0};
+
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
@@ -243,15 +367,16 @@ int main ()
         total_time += dt;
         last_time = now;
         //printf("Game loop: %.2fms\n", timer_os_time_to_ms(dt));
-        win32_process_pending_msgs();
+        win32_process_pending_msgs(&input);
 
         os_perform_hot_reload(&loaded_dll);
-        loaded_dll.app_update_and_render(buffer, depth_buffer, &memory, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
+        loaded_dll.app_update_and_render(buffer, depth_buffer, &memory, &input, timer_os_time_to_ms(total_time), timer_os_time_to_sec(dt));
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
 
         //LONGLONG stretch_now = timer_get_os_time();
         StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
         //LONGLONG stretch_last = timer_get_os_time();
         //printf("StretchDIBits time: %.2fms\n", timer_os_time_to_ms(stretch_last - stretch_now));
+        input_update(&input);
     }
 }

@@ -232,6 +232,19 @@ Mat4 mat4_make_perspective(f32 fov, f32 aspect, f32 znear, f32 zfar) {
     return m;
 }
 
+// This keeps x/y in [-1, 1], maps znear -> 0 and zfar -> -1, and uses -z as forward.
+Mat4 mat4_make_perspective_neg_z(f32 fov, f32 aspect, f32 znear, f32 zfar) {
+    f32 g = 1.0f / tan(fov * 0.5);
+    f32 k = zfar / (zfar - znear);
+    Mat4 m = {{{ 0 }}};
+    m.m[0][0] = g / aspect;
+    m.m[1][1] = g;
+    m.m[2][2] = k;
+    m.m[2][3] = znear * k;
+    m.m[3][2] = -1.0;
+    return m;
+}
+
 Mat4 mat4_look_at(Vec3 eye, Vec3 target, Vec3 up) {
     Vec3 z = vec3_sub(target, eye);
     z = vec3_normalize(z);
@@ -270,3 +283,89 @@ Mat4 mat4_mul_mat4(Mat4 a, Mat4 b) {
     }
     return m;
 }
+
+typedef struct Vec2F32 Vec2F32;
+struct Vec2F32
+{
+    f32 x;
+    f32 y;
+};
+
+inline f32 dot(Vec2F32 a, Vec2F32 b)
+{
+    return a.x * b.x + a.y * b.y;
+}
+
+inline f32 dotvp(Vec3 a, Vec3 b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline f32 len_sq(Vec2F32 a)
+{
+    return dot(a, a);
+}
+
+inline f32 len(Vec2F32 a)
+{
+    return sqrtf(dot(a, a));
+}
+
+inline Vec2F32 norm(Vec2F32 a)
+{
+    f32 vlen = len(a);
+    if (fabsf(vlen) < 0.0001)
+    {
+        return (Vec2F32){0};
+    }
+    Vec2F32 result = {a.x * 1.0f / vlen, a.y * 1.0f / vlen};
+    return result;
+}
+
+inline Vec2F32 vec_sub(Vec2F32 a, Vec2F32 b)
+{
+    return (Vec2F32) {a.x - b.x, a.y - b.y};
+}
+
+inline Vec2F32 vec_add(Vec2F32 a, Vec2F32 b)
+{
+    return (Vec2F32) {a.x + b.x, a.y + b.y};
+}
+
+inline Vec2F32 vec_scalar(Vec2F32 b, f32 s)
+{
+    return (Vec2F32) {s * b.x, s * b.y};
+}
+
+inline void vec2f32_compare_and_swap_x(Vec2F32 *a, Vec2F32 *b)
+{
+    if (a->x > b->x)
+    {
+        Vec2F32 temp = *a;
+        *a = *b;
+        *b = temp;
+    }
+}
+
+inline void vec2f32_compare_and_swap(Vec2F32 *a, Vec2F32 *b)
+{
+    if (a->y > b->y)
+    {
+        Vec2F32 temp = *a;
+        *a = *b;
+        *b = temp;
+    }
+}
+
+internal f32 orient_2d(Vec2F32 a, Vec2F32 b, Vec2F32 c)
+{
+    // AB x CA
+    return ((b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)); // 
+}
+
+internal f32 orient_2d_v3(Vec3 a, Vec3 b, Vec3 c)
+{
+    // AB x CA
+    return ((b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)); // 
+}
+
