@@ -127,19 +127,22 @@
 
   const uMVP = gl.getUniformLocation(prog, "uMVP");
 
-  // ----- Geometry: triangle centered at origin (in XY plane) -----
-  // Equilateral-ish centered around (0,0,0)
-  // skewed
-  //const verts = new Float32Array([
-  //   -0.2,  0.2, -1.0,
-  //  -0.4, 0.5, -1.2,
-  //   -0.6, 0.2, -1.0,
-  //]);
-  //center at origin
+  // ----- Geometry: quad made from 2 triangles -----
+  // Corner colors:
+  // top-left     = red
+  // top-right    = blue
+  // bottom-left  = green
+  // bottom-right = white
   const verts = new Float32Array([
-     0.0,  0.6, -35.0, 1.0, 0.0, 0.0, 1.0,
-    -0.6, -0.4, -1.0, 0.0, 1.0, 0.0, 1.0,
-     0.6, -0.4, -1.0, 0.0, 0.0, 1.0, 1.0,
+    -0.75,  0.75, -2.0, 0.0, 1.0, 0.0, 1.0,
+     0.75,  0.75, -2.0, 1.0, 1.0, 1.0, 1.0,
+    -0.75, -0.75, -2.0, 1.0, 0.0, 0.0, 1.0,
+     0.75, -0.75, -2.0, 0.0, 0.0, 1.0, 1.0,
+  ]);
+
+  const indices = new Uint16Array([
+    0, 2, 1,
+    1, 2, 3,
   ]);
 
   const vao = gl.createVertexArray();
@@ -148,6 +151,10 @@
   const vbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
   gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+
+  const ebo = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 7*4, 0);
@@ -188,7 +195,7 @@
     gl.uniformMatrix4fv(uMVP, false, mvp);
 
     gl.bindVertexArray(vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
 
     requestAnimationFrame(frame);

@@ -401,16 +401,22 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         min_y = ClampBot(min_y, 0);
         max_y = ClampTop(max_y, buffer->height);
 
+        #if 0
         Vec3 new_vv0_color = (Vec3){255.0f, 0.0f, 0.0f};
         Vec3 new_vv1_color = (Vec3){0.0f, 255.0f, 0.0f};
         Vec3 new_vv2_color = (Vec3){0.0f, 0.0f, 255.0f};
+        #else
+        Vec3 new_vv0_color = vec3_scalar((Vec3){255.0f, 0.0f, 0.0f}, inv_w0);
+        Vec3 new_vv1_color = vec3_scalar((Vec3){0.0f, 255.0f, 0.0f}, inv_w1);
+        Vec3 new_vv2_color = vec3_scalar((Vec3){0.0f, 0.0f, 255.0f}, inv_w2);
+        #endif
 
         Params params = 
         {
             view, persp,
             v0, v1, v2,
             new_vv0_color, new_vv1_color, new_vv2_color,
-            1, 1, 1,
+            inv_w0, inv_w1, inv_w2,
             min_x, max_x, min_y, max_y
         };
 
@@ -425,9 +431,10 @@ struct Vertex
 {
     Vec3 position;
     Vec3 color;
+    Vec2F32 uv;
 };
 
-void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, Mat4 view, Mat4 persp)
+void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_count, Mat4 view, Mat4 persp)
 {
     for(u32 i = 0; i < indices_count; i+=3)
     {
@@ -536,16 +543,23 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         min_y = ClampBot(min_y, 0);
         max_y = ClampTop(max_y, buffer->height);
 
+        #if 1
+        Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
+        Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
+        Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
+        #else
         Vec3 new_vv0_color = vertex0.color;
         Vec3 new_vv1_color = vertex1.color;
         Vec3 new_vv2_color = vertex2.color;
+
+        #endif
 
         Params params = 
         {
             view, persp,
             v0, v1, v2,
             new_vv0_color, new_vv1_color, new_vv2_color,
-            1, 1, 1,
+            inv_w0, inv_w1, inv_w2,
             min_x, max_x, min_y, max_y
         };
 
@@ -751,7 +765,7 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 5;
+    u32 example = 4;
     if(example == 1)
     {
         // Example 1
@@ -899,7 +913,43 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, view, persp);
+        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, 0, 0, view, persp);
+    }
+    if(example == 6)
+    {
+        // same as example 5 but now with texturing
+        u32 texels[4] = {
+            0xFF000000, 0xFFFFFFFF,
+            0xFF000000, 0xFFFFFFFF,
+        };
+        // Both CCW
+        #if 0
+        Vertex vertices[4] = {
+            (Vertex){ .position = { 0.0f, 0.0f, 5.5f },  .color = {0, 255, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 5.5f }, .color = {255, 0, 0}},
+            (Vertex){ .position = { 0.5f,  0.0f, 5.5f }, .color = {255, 255, 255}},
+            (Vertex){ .position = { 0.5f, 0.5f, 5.5f },  .color = {0, 0, 255}},
+        };
+        #else
+        Vertex vertices[4] = {
+            (Vertex){ .position = { 0.0f, 0.0f, 5.5f },  .color = {255, 255, 255}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 5.5f }, .color = {255, 255, 255}, .uv = {0, 1}},
+            (Vertex){ .position = { 0.5f,  0.0f, 5.5f }, .color = {255, 255, 255}, .uv = {1, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 5.5f },  .color = {255, 255, 255}, .uv = {1, 1}},
+        };
+        #endif
+
+        u32 indices[6] = {0, 1, 2, 2, 1, 3};
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, texels, 4, view, persp);
     }
 
     char buf[200];

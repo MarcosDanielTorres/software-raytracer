@@ -5,7 +5,7 @@ if not exist build mkdir build
 pushd build
 del *.pdb > NUL 2> NUL
 
-set test=
+set test=1
 set compiler=cl
 set mode=release
 set game_link_flags=/link -incremental:no -opt:ref /EXPORT:update_and_render libfreetype-r.lib
