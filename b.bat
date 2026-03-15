@@ -5,15 +5,15 @@ if not exist build mkdir build
 pushd build
 del *.pdb > NUL 2> NUL
 
-set test=1
+set test=
 set compiler=cl
-set mode=debug
+set mode=release
 set game_link_flags=/link -incremental:no -opt:ref /EXPORT:update_and_render libfreetype-r.lib
 set engine_link_flags=/link -incremental:no -opt:ref user32.lib gdi32.lib
 
-if "%mode%" == "debug"          set compiler_flags=-FC -nologo -WX -Od -Zi
-if "%mode%" == "release-debug"  set compiler_flags=-FC -nologo -WX -O2 -Zi
-if "%mode%" == "release"        set compiler_flags=-FC -nologo -WX -O2
+if "%mode%" == "debug"          set compiler_flags=-FC -nologo -WX -Od -Zi -DAIM_DEBUG
+if "%mode%" == "release-debug"  set compiler_flags=-FC -nologo -WX -O2 -Zi -DAIM_RELEASE_DEBUG
+if "%mode%" == "release"        set compiler_flags=-FC -nologo -WX -O2 -DAIM_RELEASE
 
 echo [Compiler %compiler% - %mode%]
 if defined test (
@@ -30,7 +30,7 @@ if defined test (
 
 echo Compiling engine
 if defined test (
-    call cl -DTEST_SUITE %compiler_flags% ..\src\main.c %engine_link_flags%
+    call cl -DAIM_TEST_SUITE %compiler_flags% ..\src\main.c %engine_link_flags%
 ) else (
     call cl %compiler_flags% ..\src\main.c %engine_link_flags%
 )

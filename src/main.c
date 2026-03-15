@@ -19,11 +19,12 @@
 global Arena *arena;
 
 static b32 g_running = 1;
+static b32 g_window_is_active = 0;
+static HWND hwnd;
+static HDC hdc;
 
 global Software_Render_Buffer *buffer;
 global Software_Depth_Buffer *depth_buffer;
-static HWND hwnd;
-static HDC hdc;
 
 LRESULT MainWndProc(
     HWND hwnd,        // handle to window
@@ -38,10 +39,50 @@ LRESULT MainWndProc(
             RECT rect = { 0 };
             GetClientRect(hwnd, &rect);
             //StretchDIBits(hdc, 0, 0, rect.right - rect.left, rect.top - rect.bottom, 0, 0, horz_res, vert_res, (void*) buffer, &bitmap_info, DIB_RGB_COLORS, SRCCOPY);
+            if(g_window_is_active)
+            {
+                win32_clip_cursor_to_client(hwnd);
+            }
         } break;
- 
+        case WM_SETCURSOR:
+        {
+            if(LOWORD(lParam) == HTCLIENT)
+            {
+                if(g_window_is_active)
+                {
+                    SetCursor(0);
+                }
+                else
+                {
+                    SetCursor(LoadCursor(0, IDC_ARROW));
+                }
+                return 1;
+            }
+        } break;
+        case WM_MOVE:
+        {
+            if(g_window_is_active)
+            {
+                win32_clip_cursor_to_client(hwnd);
+            }
+        } break;
+        case WM_ACTIVATE:
+        {
+            if(LOWORD(wParam) != WA_INACTIVE)
+            {
+                g_window_is_active = 1;
+                win32_clip_cursor_to_client(hwnd);
+            }
+            else
+            {
+                g_window_is_active = 0;
+                win32_unclip_cursor();
+            }
+        } break;
         case WM_DESTROY: 
         {
+            g_window_is_active = 0;
+            win32_unclip_cursor();
             g_running = 0;
         } break;
         default: 
@@ -52,6 +93,7 @@ LRESULT MainWndProc(
 
 void win32_process_pending_msgs(Game_Input *input) 
 {
+    TempArena scratch = scratch_begin();
     MSG Message;
     while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
     {
@@ -123,58 +165,35 @@ void win32_process_pending_msgs(Game_Input *input)
             {
                 i32 xPos = (Message.lParam & 0x0000FFFF); 
                 i32 yPos = ((Message.lParam & 0xFFFF0000) >> 16); 
-                //if(xPos >= 0 && xPos < SRC_WIDTH && yPos >= 0 && yPos < SRC_HEIGHT)
-                //{
-                //}
-                // comente esto
-                //SetCapture(global_w32_window.handle);
 
                 i32 xxPos = LOWORD(Message.lParam);
                 i32 yyPos = HIWORD(Message.lParam);
-                char buf[100];
-                sprintf(buf,  "MOUSE MOVE: x: %d, y: %d\n", xPos, yPos);
-                //printf(buf);
 
-                //assert((xxPos == xPos && yyPos == yPos));
                 input->curr_mouse_state.x = xPos;
                 input->curr_mouse_state.y = yPos;
-                
-                #if !defined(RAW_INPUT)
-                input->dx = input->curr_mouse_state.x - input->prev_mouse_state.x;
-                input->dy = -(input->curr_mouse_state.y - input->prev_mouse_state.y);
-                #endif
-
             }
             break;
-            #if RAW_INPUT
             case WM_INPUT: {
                 UINT size;
                 GetRawInputData((HRAWINPUT)Message.lParam, RID_INPUT, NULL, &size, sizeof(RAWINPUTHEADER));
 
-                AssertGui(size < 1000, "GetRawInputData surpassed 1000 bytes");
-                u8 bytes[1000];
-                RAWINPUT* raw = (RAWINPUT*)bytes;
+                RAWINPUT *raw = (RAWINPUT*)(u8*)arena_push_size(scratch.arena, u8, size);
                 GetRawInputData((HRAWINPUT)Message.lParam, RID_INPUT, raw, &size, sizeof(RAWINPUTHEADER));
-                if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+                if ((raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && raw->header.dwType == RIM_TYPEMOUSE)
                 {
-                    if (raw->header.dwType == RIM_TYPEMOUSE) 
-                    {
-                        LONG dx = raw->data.mouse.lLastX;
-                        LONG dy = raw->data.mouse.lLastY;
-                        input->dx = f32(dx);
-                        input->dy = f32(-dy);
-                    }
-                }else
-                {
-                    AssertGui(1 < 0, "MOUSE_MOVE_ABSOLUTE");
+                    LONG dx = raw->data.mouse.lLastX;
+                    LONG dy = raw->data.mouse.lLastY;
+                    input->dx += (f32)(dx);
+                    input->dy += (f32)(-dy);
                 }
-                POINT center = { LONG(SRC_WIDTH)/2, LONG(SRC_HEIGHT)/2 };
-                ClientToScreen(global_w32_window.handle, &center);
-                SetCursorPos(center.x, center.y);
-                //printf("RECENTERING!!!\n");
+
+                // GLFW does this, but im not sure if it makes sense for my usecase! Also they dont do it here
+                // recenter cursor center re center
+                //POINT center = { LONG(SRC_WIDTH)/2, LONG(SRC_HEIGHT)/2 };
+                //ClientToScreen(global_w32_window.handle, &center);
+                //SetCursorPos(center.x, center.y);
 
             } break;
-            #endif
             case WM_LBUTTONUP:
             {
                 input->curr_mouse_state.button[MouseButtons_LeftClick] = 0;
@@ -208,13 +227,14 @@ void win32_process_pending_msgs(Game_Input *input)
             } break;
         }
     }
+    scratch_end(scratch);
 }
 
 int main ()
 {
     timer_init();
     arena = arena_alloc(mb(2));
-    g_transient_arena = arena_alloc(mb(2));
+    g_transient_arena = arena_alloc(mb(10));
     // 4:3 resolutions
     // 320 x 240
     // 640 x 480    (VGA)
@@ -227,10 +247,12 @@ int main ()
     // 1920 x 1440
     i32 window_width = 800; 
     i32 window_height = 600;
-    window_width = 1280; 
-    window_height = 960;
     window_width = 1400; 
     window_height = 1050;
+    window_width = 1280; 
+    window_height = 960;
+    window_width = 1280; 
+    window_height = 720;
     window_width = 1920; 
     window_height = 1080;
 
@@ -238,7 +260,7 @@ int main ()
     i32 buffer_height = 480;
     buffer_width = 320;
     buffer_height = 240;
-    buffer_width = 940;
+    buffer_width = 960;
     buffer_height = 540;
     //buffer_width = 1920;
     //buffer_height = 1080;
@@ -288,6 +310,7 @@ int main ()
     }
     ShowWindow(hwnd, SW_SHOW);
     hdc = GetDC(hwnd);
+    g_window_is_active = (GetForegroundWindow() == hwnd);
     OS_W32_Window window = {0};
     window.hwnd = hwnd;
 
@@ -335,6 +358,21 @@ int main ()
 
     Game_Input input = {0};
 
+    SetCursor(0);
+    RAWINPUTDEVICE rid = {0};
+    rid.usUsagePage = 0x01;
+    rid.usUsage = 0x02;
+    rid.dwFlags = 0;
+    rid.hwndTarget = window.hwnd;
+    if(!RegisterRawInputDevices(&rid, 1, sizeof(rid)))
+    {
+        printf("RegisterRawInputDevices failed: %lu\n", GetLastError());
+    }
+    if(g_window_is_active)
+    {
+        win32_clip_cursor_to_client(hwnd);
+    }
+
     // TODO move to obisidan
     // it seems `GetDIBits` it's not needed at all!
     // Only `StretchDIBits`, `GetDC` (i guess), and `CreateCompatibleBitmap`
@@ -348,7 +386,7 @@ int main ()
     }
 
 
-    #if defined(TEST_SUITE)
+    #if defined(AIM_TEST_SUITE)
     u8* dll_game_name = cstring_from_str8(arena, str8_concat(arena, absolute_path, str8_literal("\\test")));
     OS_LoadedDLL loaded_dll = os_create_dll(arena, dll_game_name);
     os_load_dll(&loaded_dll);

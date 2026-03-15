@@ -33,6 +33,34 @@ win32_filetime_to_u64(FILETIME time)
     return ((u64)time.dwHighDateTime << 32) | time.dwLowDateTime;
 }
 
+internal void
+win32_clip_cursor_to_client(HWND hwnd)
+{
+    RECT rect = {0};
+    if(!GetClientRect(hwnd, &rect))
+    {
+        return;
+    }
+
+    POINT ul = {rect.left, rect.top};
+    POINT lr = {rect.right, rect.bottom};
+    ClientToScreen(hwnd, &ul);
+    ClientToScreen(hwnd, &lr);
+
+    rect.left   = ul.x;
+    rect.top    = ul.y;
+    rect.right  = lr.x;
+    rect.bottom = lr.y;
+
+    ClipCursor(&rect);
+}
+
+internal void
+win32_unclip_cursor(void)
+{
+    ClipCursor(0);
+}
+
 // TODO dont like the name of this because its tighly couple to the implmentation. Is not a generic load of a DLL. Which maybe it shouldnt be
 // I think i could have a load dll function but there must be a different load-specifc_case dll to account for other things
 // probably its best to remove this function from the os layer!

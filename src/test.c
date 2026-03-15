@@ -205,29 +205,16 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 min_y = params->min_y;
     f32 max_y = params->max_y;
 
-    Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
-    Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
-    Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
+    //Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
+    //Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
+    //Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
     //Vec2F32 s0 = { v0.x + 0.5f, (v0.y) + 0.5f };
     //Vec2F32 s1 = { (v1.x) + 0.5f, (v1.y) + 0.5f };
     //Vec2F32 s2 = { (v2.x) + 0.5f, (v2.y) + 0.5f };
+    Vec2F32 s0 = { v0.x , (v0.y) };
+    Vec2F32 s1 = { (v1.x), (v1.y) };
+    Vec2F32 s2 = { (v2.x), (v2.y) };
     f32 area = edge(s0, s1, s2);          // signed
-    #if Y_UP
-    if (area < 0.0f) // is CW
-    {
-        //Swap(v1, v2);
-        //Swap(v1_color, v2_color);
-        //Swap(inv_w1, inv_w2);
-
-        //Swap(s1, s2);
-
-        //area = -area;
-    }
-    #else
-    if(area > 0.0f) // is CW
-    {
-    }
-    #endif
 
     f32 inv_area = 1.0f / area;
     // edge stepping basically
@@ -236,9 +223,14 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
     f32 e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
 
-    // Evaluate at top-left of bbox (pixel center)
-    f32 start_x = (float)min_x + 0.5f;
-    f32 start_y = (float)min_y + 0.5f;
+    u32 x_min = (u32)floorf(min_x);
+    u32 x_max = (u32)ceilf(max_x);
+    u32 y_min = (u32)floorf(min_y);
+    u32 y_max = (u32)ceilf(max_y);
+
+    // Edge values must start at the same pixel center the loops begin from.
+    f32 start_x = (f32)x_min + 0.5f;
+    f32 start_y = (f32)y_min + 0.5f;
     Vec2F32 p0 = { start_x, start_y };
     f32 row_w0 = edge(s1, s2, p0);
     f32 row_w1 = edge(s2, s0, p0);
@@ -251,13 +243,13 @@ internal void barycentric_with_edge_stepping(Params *params)
     const f32 eps = -1e-4f;
     int lx, hx, ly, hy;
     {
-        for (u32 y = min_y; y < max_y; y++)
+        for (u32 y = y_min; y < y_max; y++)
         {
             f32 w0 = row_w0;
             f32 w1 = row_w1;
             f32 w2 = row_w2;
 
-            for (u32 x = min_x; x < max_x; x++)
+            for (u32 x = x_min; x < x_max; x++)
             {
                 // this checks if ccw
                 b32 inside_pos =
@@ -270,49 +262,37 @@ internal void barycentric_with_edge_stepping(Params *params)
                     (e0_inc ? w0 <= 0.f : w0 < -eps) &&
                     (e1_inc ? w1 <= 0.f : w1 < -eps) &&
                     (e2_inc ? w2 <= 0.f : w2 < -eps);
-                b32 inside = inside_pos || inside_neg;
+                //b32 inside = inside_pos || inside_neg;
 
-                //b32 inside = inside_pos;
+                b32 inside = inside_pos;
                 if (inside)
                 {
-                    #if 0
-                    #if Y_UP
-                    // this only works is Y_UP == 1
-                    if (!((w0 > 0 || w1 > 0 || w2 > 0)))
-                    #else
-                    // this only works is Y_UP == 0
-                    if (!((w0 < 0 || w1 < 0 || w2 < 0)))
-                    #endif
-                    #endif
+                    // area here is always less than 0
+                    //printf("%d\n", area > 0 ? 1 : 0);
+                    f32 b0 = w0 * inv_area;
+                    f32 b1 = w1 * inv_area;
+                    f32 b2 = w2 * inv_area;
+                    f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
                     {
-                        // area here is always less than 0
-                        //printf("%d\n", area > 0 ? 1 : 0);
-                        f32 b0 = w0 * inv_area;
-                        f32 b1 = w1 * inv_area;
-                        f32 b2 = w2 * inv_area;
-                        f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-                        f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
-                        if(depth < params->depth_buffer->data[y * params->buffer->width + x])
-                        {
-                            params->depth_buffer->data[y * params->buffer->width + x] = depth;
-                            Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
-                            Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
+                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
+                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
 
-                            u32 interpolated_color_to_u32 = 0;
+                        u32 interpolated_color_to_u32 = 0;
 
-                            interpolated_color_to_u32 |= (0xFF << 24) |
-                                (((u32)final_color.x) & 0xFF) << 16 |
-                                (((u32)final_color.y) & 0xFF) << 8 |
-                                (((u32)final_color.z) & 0xFF) << 0;
+                        interpolated_color_to_u32 |= (0xFF << 24) |
+                            (((u32)final_color.x) & 0xFF) << 16 |
+                            (((u32)final_color.y) & 0xFF) << 8 |
+                            (((u32)final_color.z) & 0xFF) << 0;
 
-                            draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
-
-                        }
-                        }
+                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                    }
                 }
                 w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
             }
-        row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
+            row_w0 += e0_dy; row_w1 += e1_dy; row_w2 += e2_dy; // step down
         }
     }
 }
@@ -349,6 +329,15 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         // Clip here, in clip space and before the perspective divide. Triangles fully outside
         // the frustum can be rejected here, and triangles crossing the near plane should be
         // split/intersected here; dividing first can make vertices behind the camera look valid.
+        // Clipping
+        if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
+        {
+            printf("clipping triangle %d\n", i);
+            continue;
+        }
+        // Clipping
+
+
         if(transformed_v0.w != 0)
         {
             inv_w0 = 1.0f / transformed_v0.w;
@@ -390,7 +379,7 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         f32 sign_area = orient_2d_v3(v0, v1, v2);
         if(sign_area > 0)
         {
-            // culling
+            printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
             continue;
         }
 
@@ -415,6 +404,141 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         Vec3 new_vv0_color = (Vec3){255.0f, 0.0f, 0.0f};
         Vec3 new_vv1_color = (Vec3){0.0f, 255.0f, 0.0f};
         Vec3 new_vv2_color = (Vec3){0.0f, 0.0f, 255.0f};
+
+        Params params = 
+        {
+            view, persp,
+            v0, v1, v2,
+            new_vv0_color, new_vv1_color, new_vv2_color,
+            1, 1, 1,
+            min_x, max_x, min_y, max_y
+        };
+
+        params.buffer = buffer;
+        params.depth_buffer = depth_buffer;
+        barycentric_with_edge_stepping(&params);
+    }
+}
+
+typedef struct Vertex Vertex;
+struct Vertex
+{
+    Vec3 position;
+    Vec3 color;
+};
+
+void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, Mat4 view, Mat4 persp)
+{
+    for(u32 i = 0; i < indices_count; i+=3)
+    {
+        Vertex vertex0 = vertices[indices[i]];
+        Vertex vertex1 = vertices[indices[i + 1]];
+        Vertex vertex2 = vertices[indices[i + 2]];
+
+        Vec3 v0 = vertex0.position;
+        Vec3 v1 = vertex1.position;
+        Vec3 v2 = vertex2.position;
+
+        Triangle triangle = {v0, v1, v2};
+        
+        ////// view matrix ///////
+        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+        Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+        Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+        Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+        Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+        ////// view matrix ///////
+
+        ////// projection matrix ///////
+        f32 inv_w0;
+        f32 inv_w1;
+        f32 inv_w2;
+        // remember that the projection matrix stores de viewspace z value in its w
+        // but the result vector is in clip space so z of the view matrix is in clip space, not in 
+        // viewspace, they are not the same zz
+        //  The near plane of the perspective matrix is 1 and the far plane is 50
+        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+        // Clip here, in clip space and before the perspective divide. Triangles fully outside
+        // the frustum can be rejected here, and triangles crossing the near plane should be
+        // split/intersected here; dividing first can make vertices behind the camera look valid.
+        // Clipping
+        if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
+        {
+            printf("clipping triangle %d\n", i);
+            continue;
+        }
+        // Clipping
+
+
+        if(transformed_v0.w != 0)
+        {
+            inv_w0 = 1.0f / transformed_v0.w;
+            transformed_v0.x *= inv_w0;
+            transformed_v0.y *= inv_w0;
+            transformed_v0.z *= inv_w0;
+        }
+        
+        if(transformed_v1.w != 0)
+        {
+            inv_w1 = 1.0f / transformed_v1.w;
+            transformed_v1.x *= inv_w1;
+            transformed_v1.y *= inv_w1;
+            transformed_v1.z *= inv_w1;
+        }
+        
+        if(transformed_v2.w != 0)
+        {
+            inv_w2 = 1.0f / transformed_v2.w;
+            transformed_v2.x *= inv_w2;
+            transformed_v2.y *= inv_w2;
+            transformed_v2.z *= inv_w2;
+        }
+
+        v0.x = transformed_v0.x;
+        v0.y = transformed_v0.y;
+        v0.z = transformed_v0.z;
+
+        v1.x = transformed_v1.x;
+        v1.y = transformed_v1.y;
+        v1.z = transformed_v1.z;
+
+        v2.x = transformed_v2.x;
+        v2.y = transformed_v2.y;
+        v2.z = transformed_v2.z;
+        ////// projection matrix ///////
+
+        // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
+        f32 sign_area = orient_2d_v3(v0, v1, v2);
+        if(sign_area > 0)
+        {
+            printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
+            continue;
+        }
+
+        ////// viewport transform //////
+        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+        v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
+        v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
+        v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
+        ////// viewport transform //////
+
+        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
+        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
+        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
+        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
+        min_x = ClampBot(min_x, 0);
+        max_x = ClampTop(max_x, buffer->width);
+        min_y = ClampBot(min_y, 0);
+        max_y = ClampTop(max_y, buffer->height);
+
+        Vec3 new_vv0_color = vertex0.color;
+        Vec3 new_vv1_color = vertex1.color;
+        Vec3 new_vv2_color = vertex2.color;
 
         Params params = 
         {
@@ -474,6 +598,7 @@ struct Camera
 {
     Vec3 position;
     Vec3 forward;
+    Vec3 right;
     f32 pitch;
     f32 yaw;
 };
@@ -485,6 +610,60 @@ struct Game_State
     FontInfo font_info;
     Camera camera;
 };
+
+internal void
+camera_handle_movement(Camera *camera, Game_Input *input, f32 dt)
+{
+    f32 speed = 1.0;
+    if(input_is_key_pressed(input, Keys_W))
+    {
+        Vec3 forward = vec3_scalar(camera->forward, speed * dt);
+        camera->position = vec3_add(camera->position, forward);
+    }
+    if(input_is_key_pressed(input, Keys_S))
+    {
+        Vec3 forward = vec3_scalar(camera->forward, speed * dt);
+        camera->position = vec3_sub(camera->position, forward);
+    }
+    if(input_is_key_pressed(input, Keys_A))
+    {
+        Vec3 right = vec3_scalar(camera->right, speed * dt);
+        camera->position = vec3_sub(camera->position, right);
+    }
+    if(input_is_key_pressed(input, Keys_D))
+    {
+        Vec3 right = vec3_scalar(camera->right, speed * dt);
+        camera->position = vec3_add(camera->position, right);
+        //Vec3 right = {.x = speed * dt, 0, 0};
+        //camera->position = vec3_add(camera->position, right);
+    }
+    if(input_is_key_pressed(input, Keys_Space))
+    {
+        Vec3 up = {0, speed * dt, 0};
+        camera->position = vec3_sub(camera->position, up);
+    }
+    if(input_is_key_pressed(input, Keys_Control))
+    {
+        Vec3 up = {0, speed * dt, 0};
+        camera->position = vec3_add(camera->position, up);
+    }
+    {
+        f32 speed = 0.001f;
+        f32 dx = input->dx;
+        f32 dy = input->dy;
+        camera->pitch += dy * speed;
+        camera->yaw += dx * speed; 
+        f32 c_pitch = cos(camera->pitch);
+        f32 c_yaw = cos(camera->yaw);
+        f32 s_pitch = sin(camera->pitch);
+        f32 s_yaw = sin(camera->yaw);
+        Vec3 new_forward = {c_pitch * s_yaw, -s_pitch, c_pitch * c_yaw};
+        //printf("%.2f, %.2f, %.2f\n", camera->forward.x, camera->forward.y, camera->forward.z);
+        camera->forward = new_forward;
+        camera->right = vec3_normalize(vec3_cross((Vec3){0, 1, 0}, new_forward));
+        //printf("%.2f, %.2f, %.2f\n", camera->right.x, camera->right.y, camera->right.z);
+    }
+}
 
 UPDATE_AND_RENDER(update_and_render)
 {
@@ -572,7 +751,7 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 3;
+    u32 example = 5;
     if(example == 1)
     {
         // Example 1
@@ -658,34 +837,69 @@ UPDATE_AND_RENDER(update_and_render)
         f32 sign_ccw = orient_2d_v3(ccw_tri.v0, ccw_tri.v1, ccw_tri.v2);
         ccw_tri.sign_area = sign_ccw;
         Triangle triangles[2] = {cw_tri, ccw_tri};
+        camera_handle_movement(&game_state->camera, input, dt);
 
-        f32 speed = 4;
-        if(input_is_key_pressed(input, Keys_W))
-        {
-            Vec3 forward = vec3_scalar(game_state->camera.forward, speed * dt);
-            game_state->camera.position = vec3_add(game_state->camera.position, forward);
-        }
-        if(input_is_key_pressed(input, Keys_S))
-        {
-
-        }
-        if(input_is_key_pressed(input, Keys_A))
-        {
-
-        }
-        if(input_is_key_pressed(input, Keys_D))
-        {
-
-        }
         Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
-        //view = mat4_identity();
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block(buffer, depth_buffer, triangles + 1, 1, view, persp);
+    }
+    if(example == 4)
+    {
+        // Example 4
+        // Both CCW
+        Triangle ccw_tri = {
+            .v0 = (Vec3) { 0.0f, 0.0f, 5.5f },
+            .v1 = (Vec3) { 0.0f, 0.50f, 5.5f },
+            .v2 = (Vec3) { 0.5f,  0.0f, 5.5f },
+            .text = str8_literal("CCW"),
+        };
+        f32 sign_ccw = orient_2d_v3(ccw_tri.v0, ccw_tri.v1, ccw_tri.v2);
+        ccw_tri.sign_area = sign_ccw;
+
+        Triangle ccw_tri2 = {
+            .v0 = (Vec3) { 0.5f,  0.0f, 5.5f },
+            .v1 = (Vec3) { 0.0f, 0.5f, 5.5f },
+            .v2 = (Vec3) { 0.5f, 0.5f, 5.5f },
+            .text = str8_literal("CCW"),
+        };
+        f32 sign_ccw2 = orient_2d_v3(ccw_tri2.v0, ccw_tri2.v1, ccw_tri2.v2);
+        ccw_tri2.sign_area = sign_ccw2;
+        Triangle triangles[2] = {ccw_tri, ccw_tri2};
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
         f32 fov = 3.141592 / 3.0; // 60 deg
         f32 aspect = (f32)buffer->width / (f32)buffer->height;
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
+    }
+    if(example == 5)
+    {
+        // same as example 4 but with indices
+        // Both CCW
+        Vertex vertices[4] = {
+            (Vertex){ .position = { 0.0f, 0.0f, 5.5f }, .color = {0, 255, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 5.5f }, .color = {255, 0, 0}},
+            (Vertex){ .position = { 0.5f,  0.0f, 5.5f }, .color = {255, 255, 255}},
+            (Vertex){ .position = { 0.5f, 0.5f, 5.5f }, .color = {0, 0, 255}},
+        };
+        u32 indices[6] = {0, 1, 2, 2, 1, 3};
 
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, view, persp);
     }
 
     char buf[200];
@@ -712,5 +926,15 @@ UPDATE_AND_RENDER(update_and_render)
         char buf[200];
         snprintf(buf, 200, "Camera position: (%.2f, %.2f, %.2f)", camera.position.x, camera.position.y, camera.position.z);
         draw_text(buffer, 4, 65, buf);
+    }
+    {
+        char buf[200];
+        snprintf(buf, 200, "mouse deltas: (%.2f, %.2f)", input->dx, input->dy);
+        draw_text(buffer, 4, 80, buf);
+    }
+    {
+        char buf[200];
+        snprintf(buf, 200, "camera pitch and yaw: (%.2f, %.2f)", game_state->camera.pitch, game_state->camera.yaw);
+        draw_text(buffer, 4, 95, buf);
     }
 }

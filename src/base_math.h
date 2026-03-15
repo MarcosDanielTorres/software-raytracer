@@ -17,6 +17,14 @@ struct Vec4
     f32 w;
 };
 
+typedef struct Point3 Point3;
+struct Point3
+{
+    f32 x;
+    f32 y;
+    f32 z;
+};
+
 typedef struct Vec3 Vec3;
 struct Vec3
 {
@@ -369,3 +377,27 @@ internal f32 orient_2d_v3(Vec3 a, Vec3 b, Vec3 c)
     return ((b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)); // 
 }
 
+
+typedef struct Plane Plane;
+struct Plane
+{
+    f32 x, y, z, w;
+};
+
+internal Vec3 plane_get_normal(Plane plane)
+{
+    Vec3 result = {.x = plane.x, .y = plane.y, .z = plane.z};
+    return result;
+}
+
+internal f32 plane_dotv(Plane plane, Vec3 vector)
+{
+    f32 result = {plane.x * vector.x + plane.y * vector.y + plane.z * vector.z};
+    return result;
+}
+
+internal f32 plane_dotp(Plane plane, Point3 point)
+{
+    f32 result = {plane.x * point.x + plane.y * point.y + plane.z * point.z + plane.w};
+    return result;
+}

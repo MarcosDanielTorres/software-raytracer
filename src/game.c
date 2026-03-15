@@ -48,7 +48,7 @@
 #include FT_FREETYPE_H
 #define internal static
 
-#define SIMD 1
+#define SIMD 0
 #ifndef SIMD
     #define SIMD 0  
 #endif
@@ -1230,12 +1230,15 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 min_y = params->min_y;
     f32 max_y = params->max_y;
 
+    #if 1
     Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
     Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
     Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
-    //Vec2F32 s0 = { v0.x + 0.5f, (v0.y) + 0.5f };
-    //Vec2F32 s1 = { (v1.x) + 0.5f, (v1.y) + 0.5f };
-    //Vec2F32 s2 = { (v2.x) + 0.5f, (v2.y) + 0.5f };
+    #else
+    Vec2F32 s0 = { v0.x, (v0.y) };
+    Vec2F32 s1 = { (v1.x), (v1.y) };
+    Vec2F32 s2 = { (v2.x), (v2.y) };
+    #endif
     f32 area = edge(s0, s1, s2);          // signed
     #if Y_UP
     if (area < 0.0f) // is CW
@@ -1261,9 +1264,14 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 e1_dx = (s0.y - s2.y);  float e1_dy = -(s0.x - s2.x); // E1 = edge(s2,s0,p)
     f32 e2_dx = (s1.y - s0.y);  float e2_dy = -(s1.x - s0.x); // E2 = edge(s0,s1,p)
 
-    // Evaluate at top-left of bbox (pixel center)
-    f32 start_x = (float)min_x + 0.5f;
-    f32 start_y = (float)min_y + 0.5f;
+    u32 x_min = (u32)floorf(min_x);
+    u32 x_max = (u32)ceilf(max_x);
+    u32 y_min = (u32)floorf(min_y);
+    u32 y_max = (u32)ceilf(max_y);
+
+    // Edge values must start at the same pixel center the loops begin from.
+    f32 start_x = (f32)x_min + 0.5f;
+    f32 start_y = (f32)y_min + 0.5f;
     Vec2F32 p0 = { start_x, start_y };
     f32 row_w0 = edge(s1, s2, p0);
     f32 row_w1 = edge(s2, s0, p0);
@@ -1276,13 +1284,13 @@ internal void barycentric_with_edge_stepping(Params *params)
     const f32 eps = -1e-4f;
     int lx, hx, ly, hy;
     {
-        for (u32 y = min_y; y < max_y; y++)
+        for (u32 y = y_min; y < y_max; y++)
         {
             f32 w0 = row_w0;
             f32 w1 = row_w1;
             f32 w2 = row_w2;
 
-            for (u32 x = min_x; x < max_x; x++)
+            for (u32 x = x_min; x < x_max; x++)
             {
 
 
