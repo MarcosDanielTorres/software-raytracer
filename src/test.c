@@ -34,6 +34,12 @@ struct Params
     Vec3 v0_color;
     Vec3 v1_color;
     Vec3 v2_color;
+    Vec2 v0_uv;
+    Vec2 v1_uv;
+    Vec2 v2_uv;
+    u32 *texture;
+    u32 texture_width;
+    u32 texture_height;
     f32 inv_w0;
     f32 inv_w1;
     f32 inv_w2;
@@ -63,6 +69,33 @@ struct Bitmap {
     i32 pitch;
     u8* buffer;
 };
+
+internal u8
+clamp_u8_from_f32(f32 value)
+{
+    if(value < 0.0f) return 0;
+    if(value > 255.0f) return 255;
+    return (u8)(value + 0.5f);
+}
+
+internal u32
+multiply_color_u32_by_rgb8(u32 color, u8 tint_r, u8 tint_g, u8 tint_b)
+{
+    u8 a = (u8)((color >> 24) & 0xFF);
+    u32 src_r = (color >> 16) & 0xFF;
+    u32 src_g = (color >> 8) & 0xFF;
+    u32 src_b = (color >> 0) & 0xFF;
+    u32 r = (src_r * tint_r + 127) / 255;
+    u32 g = (src_g * tint_g + 127) / 255;
+    u32 b = (src_b * tint_b + 127) / 255;
+
+    u32 result = 0;
+    result |= ((u32)a) << 24;
+    result |= r << 16;
+    result |= g << 8;
+    result |= b << 0;
+    return result;
+}
 
 typedef struct FontGlyph FontGlyph;
 struct FontGlyph {
@@ -197,6 +230,9 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec3 v0_color = params->v0_color;
     Vec3 v1_color = params->v1_color;
     Vec3 v2_color = params->v2_color;
+    Vec2 v0_uv = params->v0_uv;
+    Vec2 v1_uv = params->v1_uv;
+    Vec2 v2_uv = params->v2_uv;
     f32 inv_w0 = params->inv_w0;
     f32 inv_w1 = params->inv_w1;
     f32 inv_w2 = params->inv_w2;
@@ -248,7 +284,8 @@ internal void barycentric_with_edge_stepping(Params *params)
             f32 w0 = row_w0;
             f32 w1 = row_w1;
             f32 w2 = row_w2;
-
+            f32 *depth_row = params->depth_buffer->data + params->depth_buffer->width * y + x_min;
+            u32 *color_row = params->buffer->data + params->buffer->width * y + x_min;
             for (u32 x = x_min; x < x_max; x++)
             {
                 // this checks if ccw
@@ -262,9 +299,9 @@ internal void barycentric_with_edge_stepping(Params *params)
                     (e0_inc ? w0 <= 0.f : w0 < -eps) &&
                     (e1_inc ? w1 <= 0.f : w1 < -eps) &&
                     (e2_inc ? w2 <= 0.f : w2 < -eps);
-                //b32 inside = inside_pos || inside_neg;
+                b32 inside = inside_pos || inside_neg;
 
-                b32 inside = inside_pos;
+                //b32 inside = inside_pos;
                 if (inside)
                 {
                     // area here is always less than 0
@@ -274,20 +311,42 @@ internal void barycentric_with_edge_stepping(Params *params)
                     f32 b2 = w2 * inv_area;
                     f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
                     f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
-                    if(depth < params->depth_buffer->data[y * params->buffer->width + x])
+                    //if(depth < params->depth_buffer->data[y * params->depth_buffer->width + x])
+                    if(depth < depth_row[x - x_min])
                     {
-                        params->depth_buffer->data[y * params->buffer->width + x] = depth;
-                        Vec3 interpolated_color = vec3_add(vec3_add(vec3_scalar(v0_color, b0), vec3_scalar(v1_color, b1)), vec3_scalar(v2_color, b2));
-                        Vec3 final_color = vec3_scalar(interpolated_color, 1.0f / inv_w_interp);
+                        // params->depth_buffer->data[y * params->depth_buffer->width + x] = depth;
+                        depth_row[x - x_min] = depth;
+                        f32 inv_inv_w = 1.0f / inv_w_interp;
 
-                        u32 interpolated_color_to_u32 = 0;
+                        f32 uv_x = (v0_uv.x * b0 + v1_uv.x * b1 + v2_uv.x * b2) * inv_inv_w;
+                        f32 uv_y = (v0_uv.y * b0 + v1_uv.y * b1 + v2_uv.y * b2) * inv_inv_w;
 
-                        interpolated_color_to_u32 |= (0xFF << 24) |
-                            (((u32)final_color.x) & 0xFF) << 16 |
-                            (((u32)final_color.y) & 0xFF) << 8 |
-                            (((u32)final_color.z) & 0xFF) << 0;
+                        f32 color_r = (v0_color.x * b0 + v1_color.x * b1 + v2_color.x * b2) * inv_inv_w;
+                        f32 color_g = (v0_color.y * b0 + v1_color.y * b1 + v2_color.y * b2) * inv_inv_w;
+                        f32 color_b = (v0_color.z * b0 + v1_color.z * b1 + v2_color.z * b2) * inv_inv_w;
 
-                        draw_pixel(params->buffer, x, y, interpolated_color_to_u32);
+                        u8 tint_r = clamp_u8_from_f32(color_r);
+                        u8 tint_g = clamp_u8_from_f32(color_g);
+                        u8 tint_b = clamp_u8_from_f32(color_b);
+
+                        u32 out_color;
+                        if(params->texture)
+                        {
+                            u32 tx = (u32)(uv_x * params->texture_width);
+                            u32 ty = (u32)(uv_y * params->texture_height);
+                            if(tx >= params->texture_width)  tx = params->texture_width - 1;
+                            if(ty >= params->texture_height) ty = params->texture_height - 1;
+
+                            u32 texel_index = ty * params->texture_width + tx;
+                            out_color = multiply_color_u32_by_rgb8(params->texture[texel_index], tint_r, tint_g, tint_b);
+                        }
+                        else
+                        {
+                            out_color = (0xFFu << 24) | ((u32)tint_r << 16) | ((u32)tint_g << 8) | ((u32)tint_b << 0);
+                        }
+                        draw_pixel(params->buffer, x, y, out_color);
+                        //memcpy((void*)&color_row[x - x_min], &out_color, 4);
+                        //color_row[x - x_min] = out_color;
                     }
                 }
                 w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
@@ -380,7 +439,6 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         if(sign_area > 0)
         {
             printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
-            continue;
         }
 
         ////// viewport transform //////
@@ -401,21 +459,16 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         min_y = ClampBot(min_y, 0);
         max_y = ClampTop(max_y, buffer->height);
 
-        #if 0
-        Vec3 new_vv0_color = (Vec3){255.0f, 0.0f, 0.0f};
-        Vec3 new_vv1_color = (Vec3){0.0f, 255.0f, 0.0f};
-        Vec3 new_vv2_color = (Vec3){0.0f, 0.0f, 255.0f};
-        #else
         Vec3 new_vv0_color = vec3_scalar((Vec3){255.0f, 0.0f, 0.0f}, inv_w0);
         Vec3 new_vv1_color = vec3_scalar((Vec3){0.0f, 255.0f, 0.0f}, inv_w1);
         Vec3 new_vv2_color = vec3_scalar((Vec3){0.0f, 0.0f, 255.0f}, inv_w2);
-        #endif
 
         Params params = 
         {
             view, persp,
             v0, v1, v2,
             new_vv0_color, new_vv1_color, new_vv2_color,
+            {0,0}, {0,0}, {0,0}, 0, 0, 0,
             inv_w0, inv_w1, inv_w2,
             min_x, max_x, min_y, max_y
         };
@@ -431,7 +484,7 @@ struct Vertex
 {
     Vec3 position;
     Vec3 color;
-    Vec2F32 uv;
+    Vec2 uv;
 };
 
 void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_count, Mat4 view, Mat4 persp)
@@ -445,6 +498,10 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         Vec3 v0 = vertex0.position;
         Vec3 v1 = vertex1.position;
         Vec3 v2 = vertex2.position;
+
+        Vec2 v0_uv = vertex0.uv;
+        Vec2 v1_uv = vertex1.uv;
+        Vec2 v2_uv = vertex2.uv;
 
         Triangle triangle = {v0, v1, v2};
         
@@ -522,7 +579,6 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         if(sign_area > 0)
         {
             printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
-            continue;
         }
 
         ////// viewport transform //////
@@ -543,22 +599,19 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         min_y = ClampBot(min_y, 0);
         max_y = ClampTop(max_y, buffer->height);
 
-        #if 1
         Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
         Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
         Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
-        #else
-        Vec3 new_vv0_color = vertex0.color;
-        Vec3 new_vv1_color = vertex1.color;
-        Vec3 new_vv2_color = vertex2.color;
-
-        #endif
+        v0_uv = vec2_scalar(v0_uv, inv_w0);
+        v1_uv = vec2_scalar(v1_uv, inv_w1);
+        v2_uv = vec2_scalar(v2_uv, inv_w2);
 
         Params params = 
         {
             view, persp,
             v0, v1, v2,
             new_vv0_color, new_vv1_color, new_vv2_color,
+            v0_uv, v1_uv, v2_uv, texels, 2, 2,
             inv_w0, inv_w1, inv_w2,
             min_x, max_x, min_y, max_y
         };
@@ -765,7 +818,7 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 4;
+    u32 example = 8;
     if(example == 1)
     {
         // Example 1
@@ -920,7 +973,7 @@ UPDATE_AND_RENDER(update_and_render)
         // same as example 5 but now with texturing
         u32 texels[4] = {
             0xFF000000, 0xFFFFFFFF,
-            0xFF000000, 0xFFFFFFFF,
+            0xFFFFFFFF, 0xFF000000
         };
         // Both CCW
         #if 0
@@ -932,10 +985,10 @@ UPDATE_AND_RENDER(update_and_render)
         };
         #else
         Vertex vertices[4] = {
-            (Vertex){ .position = { 0.0f, 0.0f, 5.5f },  .color = {255, 255, 255}, .uv = {0, 0}},
-            (Vertex){ .position = { 0.0f, 0.50f, 5.5f }, .color = {255, 255, 255}, .uv = {0, 1}},
-            (Vertex){ .position = { 0.5f,  0.0f, 5.5f }, .color = {255, 255, 255}, .uv = {1, 0}},
-            (Vertex){ .position = { 0.5f, 0.5f, 5.5f },  .color = {255, 255, 255}, .uv = {1, 1}},
+            (Vertex){ .position = { 0.0f, 0.0f, 2.5f },  .color = {255, 255, 255}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 2.5f }, .color = {255, 255, 255}, .uv = {0, 1}},
+            (Vertex){ .position = { 0.5f,  0.0f, 2.5f }, .color = {255, 255, 255}, .uv = {1, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 2.5f },  .color = {255, 255, 255}, .uv = {1, 1}},
         };
         #endif
 
@@ -950,6 +1003,80 @@ UPDATE_AND_RENDER(update_and_render)
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, texels, 4, view, persp);
+    }
+    if(example == 7)
+    {
+        // Two quads side by side, each with its own 0..1 UVs, so the checker restarts on the seam.
+        u32 texels[4] = {
+            0xFF000000, 0xFFFFFFFF,
+            0xFFFFFFFF, 0xFF000000
+        };
+        Vertex vertices[8] = {
+            (Vertex){ .position = { 0.0f, 0.0f, 2.5f },  .color = {255, 128, 128}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 2.5f }, .color = {255, 128, 128}, .uv = {0, 1}},
+            (Vertex){ .position = { 0.5f, 0.0f, 2.5f },  .color = {255, 128, 128}, .uv = {1, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 2.5f },  .color = {255, 128, 128}, .uv = {1, 1}},
+            (Vertex){ .position = { 0.5f, 0.0f, 2.5f },  .color = {128, 192, 255}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 2.5f },  .color = {128, 192, 255}, .uv = {0, 1}},
+            (Vertex){ .position = { 1.0f, 0.0f, 2.5f },  .color = {128, 192, 255}, .uv = {1, 0}},
+            (Vertex){ .position = { 1.0f, 0.5f, 2.5f },  .color = {128, 192, 255}, .uv = {1, 1}},
+        };
+        u32 indices[12] = {0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7};
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp);
+    }
+    if(example == 8)
+    {
+        // Same as example 7, but rotate the whole strip to inspect perspective-correct texture interpolation.
+        u32 texels[4] = {
+            0xFF000000, 0xFFFFFFFF,
+            0xFFFFFFFF, 0xFF000000
+        };
+        Vertex vertices[8] = {
+            (Vertex){ .position = { 0.0f, 0.0f, 2.5f },  .color = {255, 128, 128}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.0f, 0.50f, 2.5f }, .color = {255, 128, 128}, .uv = {0, 1}},
+            (Vertex){ .position = { 0.5f, 0.0f, 2.5f },  .color = {255, 128, 128}, .uv = {1, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 2.5f },  .color = {255, 128, 128}, .uv = {1, 1}},
+            (Vertex){ .position = { 0.5f, 0.0f, 2.5f },  .color = {128, 192, 255}, .uv = {0, 0}},
+            (Vertex){ .position = { 0.5f, 0.5f, 2.5f },  .color = {128, 192, 255}, .uv = {0, 1}},
+            (Vertex){ .position = { 1.0f, 0.0f, 2.5f },  .color = {128, 192, 255}, .uv = {1, 0}},
+            (Vertex){ .position = { 1.0f, 0.5f, 2.5f },  .color = {128, 192, 255}, .uv = {1, 1}},
+        };
+        u32 indices[12] = {0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7};
+
+        static f32 example_8_angle = 0.0f;
+        example_8_angle += dt;
+
+        Vec3 center = {0.5f, 0.25f, 2.5f};
+        f32 cy = cosf(example_8_angle);
+        f32 sy = sinf(example_8_angle);
+        f32 cx = cosf(example_8_angle * 0.5f);
+        f32 sx = sinf(example_8_angle * 0.5f);
+        for(u32 vertex_index = 0; vertex_index < 8; vertex_index++)
+        {
+            Vec3 p = vec3_sub(vertices[vertex_index].position, center);
+            p = vec3_rotate_y(p, cy, sy);
+            p = vec3_rotate_x(p, cx, sx);
+            vertices[vertex_index].position = vec3_add(p, center);
+        }
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp);
     }
 
     char buf[200];

@@ -291,6 +291,12 @@ Mat4 mat4_mul_mat4(Mat4 a, Mat4 b) {
     }
     return m;
 }
+typedef struct Vec2 Vec2;
+struct Vec2
+{
+    f32 x;
+    f32 y;
+};
 
 typedef struct Vec2F32 Vec2F32;
 struct Vec2F32
@@ -335,9 +341,19 @@ inline Vec2F32 vec_sub(Vec2F32 a, Vec2F32 b)
     return (Vec2F32) {a.x - b.x, a.y - b.y};
 }
 
+inline Vec2 vec2_add(Vec2 a, Vec2 b)
+{
+    return (Vec2) {a.x + b.x, a.y + b.y};
+}
+
 inline Vec2F32 vec_add(Vec2F32 a, Vec2F32 b)
 {
     return (Vec2F32) {a.x + b.x, a.y + b.y};
+}
+
+inline Vec2 vec2_scalar(Vec2 b, f32 s)
+{
+    return (Vec2) {s * b.x, s * b.y};
 }
 
 inline Vec2F32 vec_scalar(Vec2F32 b, f32 s)
