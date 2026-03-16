@@ -895,7 +895,7 @@ UPDATE_AND_RENDER(update_and_render)
     {
         example--;
     }
-    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && example < 9)
+    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && example < 10)
     {
         example++;
     }
@@ -1196,6 +1196,74 @@ UPDATE_AND_RENDER(update_and_render)
         provisionary_block2(buffer, depth_buffer, vertices_perspective, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling);
         provisionary_block2(buffer, depth_buffer, vertices_affine, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling | RenderFlags_AffineUVInterpolation);
     }
+    if(example == 10)
+    {
+        // Tiled floor built from many quads. Each tile reuses the same checker UVs,
+        // while the tint repeats every few tiles to make the pattern easier to read.
+        u32 texels[4] = {
+            0xFF141414, 0xFFF0F0F0,
+            0xFFF0F0F0, 0xFF141414
+        };
+        enum
+        {
+            floor_columns = 12,
+            floor_rows = 18,
+            floor_quad_count = floor_columns * floor_rows,
+            floor_vertex_count = floor_quad_count * 4,
+            floor_index_count = floor_quad_count * 6,
+        };
+        Vertex vertices[floor_vertex_count];
+        u32 indices[floor_index_count];
+        Vec3 tint_palette[4] = {
+            {255.0f, 225.0f, 225.0f},
+            {225.0f, 255.0f, 235.0f},
+            {225.0f, 235.0f, 255.0f},
+            {255.0f, 245.0f, 210.0f},
+        };
+        f32 tile_width = 1.0f;
+        f32 tile_depth = 1.0f;
+        f32 floor_y = 1.2f;
+        f32 start_x = -((f32)floor_columns * tile_width) * 0.5f;
+        f32 start_z = 2.0f;
+        u32 vertex_cursor = 0;
+        u32 index_cursor = 0;
+        for(u32 row = 0; row < floor_rows; row++)
+        {
+            for(u32 column = 0; column < floor_columns; column++)
+            {
+                f32 x0 = start_x + (f32)column * tile_width;
+                f32 x1 = x0 + tile_width;
+                f32 z0 = start_z + (f32)row * tile_depth;
+                f32 z1 = z0 + tile_depth;
+                Vec3 tint = tint_palette[(row + column) % ArrayCount(tint_palette)];
+
+                vertices[vertex_cursor + 0] = (Vertex){ .position = {x0, floor_y, z0}, .color = tint, .uv = {0, 0} };
+                vertices[vertex_cursor + 1] = (Vertex){ .position = {x0, floor_y, z1}, .color = tint, .uv = {0, 1} };
+                vertices[vertex_cursor + 2] = (Vertex){ .position = {x1, floor_y, z0}, .color = tint, .uv = {1, 0} };
+                vertices[vertex_cursor + 3] = (Vertex){ .position = {x1, floor_y, z1}, .color = tint, .uv = {1, 1} };
+
+                indices[index_cursor + 0] = vertex_cursor + 0;
+                indices[index_cursor + 1] = vertex_cursor + 2;
+                indices[index_cursor + 2] = vertex_cursor + 1;
+                indices[index_cursor + 3] = vertex_cursor + 2;
+                indices[index_cursor + 4] = vertex_cursor + 3;
+                indices[index_cursor + 5] = vertex_cursor + 1;
+
+                vertex_cursor += 4;
+                index_cursor += 6;
+            }
+        }
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592f / 3.0f; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices, floor_vertex_count, indices, floor_index_count, texels, 4, view, persp, RenderFlags_Culling);
+    }
     char buf[200];
     snprintf(buf, 200, "Running example: %d", example);
     draw_text(buffer, 4, 20, buf);
@@ -1234,5 +1302,9 @@ UPDATE_AND_RENDER(update_and_render)
     if(example == 9)
     {
         draw_text(buffer, 4, 110, "Left: perspective correct | Right: affine");
+    }
+    if(example == 10)
+    {
+        draw_text(buffer, 4, 110, "Tiled checker floor with repeating tint palette");
     }
 }
