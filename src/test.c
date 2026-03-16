@@ -23,6 +23,14 @@
 #include FT_FREETYPE_H
 #define internal static
 
+typedef u32 RendererProperties_Flags;
+enum
+{
+    RenderFlags_AffineUVInterpolation = (1u << 0),
+    RenderFlags_Culling = (1u << 1),
+    RenderFlags_TwoSidedRasterization = (1u << 2),
+};
+
 typedef struct Params Params;
 struct Params
 {
@@ -50,6 +58,7 @@ struct Params
     Obj_Model *model;
     Software_Render_Buffer *buffer;
     Software_Depth_Buffer *depth_buffer;
+    RendererProperties_Flags render_flags;
 };
 
 typedef struct Triangle Triangle;
@@ -224,6 +233,7 @@ static inline b32 is_top_left_edge(float dx, float dy)
 }
 internal void barycentric_with_edge_stepping(Params *params)
 {
+    RendererProperties_Flags render_flags = params->render_flags;
     Vec3 v0 = params->v0;
     Vec3 v1 = params->v1;
     Vec3 v2 = params->v2;
@@ -288,20 +298,19 @@ internal void barycentric_with_edge_stepping(Params *params)
             u32 *color_row = params->buffer->data + params->buffer->width * y + x_min;
             for (u32 x = x_min; x < x_max; x++)
             {
-                // this checks if ccw
                 b32 inside_pos =
                     (e0_inc ? w0 >= 0.f : w0 > eps) &&
                     (e1_inc ? w1 >= 0.f : w1 > eps) &&
                     (e2_inc ? w2 >= 0.f : w2 > eps);
-
-                // this checks if cw
-                b32 inside_neg =
-                    (e0_inc ? w0 <= 0.f : w0 < -eps) &&
-                    (e1_inc ? w1 <= 0.f : w1 < -eps) &&
-                    (e2_inc ? w2 <= 0.f : w2 < -eps);
-                b32 inside = inside_pos || inside_neg;
-
-                //b32 inside = inside_pos;
+                b32 inside = inside_pos;
+                if(render_flags & RenderFlags_TwoSidedRasterization)
+                {
+                    b32 inside_neg =
+                        (e0_inc ? w0 <= 0.f : w0 < -eps) &&
+                        (e1_inc ? w1 <= 0.f : w1 < -eps) &&
+                        (e2_inc ? w2 <= 0.f : w2 < -eps);
+                    inside = inside_pos || inside_neg;
+                }
                 if (inside)
                 {
                     // area here is always less than 0
@@ -318,8 +327,13 @@ internal void barycentric_with_edge_stepping(Params *params)
                         depth_row[x - x_min] = depth;
                         f32 inv_inv_w = 1.0f / inv_w_interp;
 
-                        f32 uv_x = (v0_uv.x * b0 + v1_uv.x * b1 + v2_uv.x * b2) * inv_inv_w;
-                        f32 uv_y = (v0_uv.y * b0 + v1_uv.y * b1 + v2_uv.y * b2) * inv_inv_w;
+                        f32 uv_x = (v0_uv.x * b0 + v1_uv.x * b1 + v2_uv.x * b2);
+                        f32 uv_y = (v0_uv.y * b0 + v1_uv.y * b1 + v2_uv.y * b2);
+                        if((render_flags & RenderFlags_AffineUVInterpolation) == 0)
+                        {
+                            uv_x *= inv_inv_w;
+                            uv_y *= inv_inv_w;
+                        }
 
                         f32 color_r = (v0_color.x * b0 + v1_color.x * b1 + v2_color.x * b2) * inv_inv_w;
                         f32 color_g = (v0_color.y * b0 + v1_color.y * b1 + v2_color.y * b2) * inv_inv_w;
@@ -356,7 +370,7 @@ internal void barycentric_with_edge_stepping(Params *params)
     }
 }
 
-void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Triangle* triangles, u32 count, Mat4 view, Mat4 persp)
+void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Triangle* triangles, u32 count, Mat4 view, Mat4 persp, RendererProperties_Flags render_flags)
 {
     for(u32 i = 0; i < count; i++)
     {
@@ -436,9 +450,10 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
 
         // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
         f32 sign_area = orient_2d_v3(v0, v1, v2);
-        if(sign_area > 0)
+        if((render_flags & RenderFlags_Culling) && sign_area > 0)
         {
             printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
+            continue;
         }
 
         ////// viewport transform //////
@@ -475,6 +490,7 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
 
         params.buffer = buffer;
         params.depth_buffer = depth_buffer;
+        params.render_flags = render_flags;
         barycentric_with_edge_stepping(&params);
     }
 }
@@ -487,7 +503,23 @@ struct Vertex
     Vec2 uv;
 };
 
-void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_count, Mat4 view, Mat4 persp)
+internal void
+rotate_vertices_about_center(Vertex *vertices, u32 count, Vec3 center, f32 angle_y, f32 angle_x)
+{
+    f32 cy = cosf(angle_y);
+    f32 sy = sinf(angle_y);
+    f32 cx = cosf(angle_x);
+    f32 sx = sinf(angle_x);
+    for(u32 vertex_index = 0; vertex_index < count; vertex_index++)
+    {
+        Vec3 p = vec3_sub(vertices[vertex_index].position, center);
+        p = vec3_rotate_y(p, cy, sy);
+        p = vec3_rotate_x(p, cx, sx);
+        vertices[vertex_index].position = vec3_add(p, center);
+    }
+}
+
+void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_count, Mat4 view, Mat4 persp, RendererProperties_Flags render_flags)
 {
     for(u32 i = 0; i < indices_count; i+=3)
     {
@@ -576,9 +608,10 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
 
         // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
         f32 sign_area = orient_2d_v3(v0, v1, v2);
-        if(sign_area > 0)
+        if((render_flags & RenderFlags_Culling) && sign_area > 0)
         {
             printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
+            continue;
         }
 
         ////// viewport transform //////
@@ -602,9 +635,12 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
         Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
         Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
-        v0_uv = vec2_scalar(v0_uv, inv_w0);
-        v1_uv = vec2_scalar(v1_uv, inv_w1);
-        v2_uv = vec2_scalar(v2_uv, inv_w2);
+        if((render_flags & RenderFlags_AffineUVInterpolation) == 0)
+        {
+            v0_uv = vec2_scalar(v0_uv, inv_w0);
+            v1_uv = vec2_scalar(v1_uv, inv_w1);
+            v2_uv = vec2_scalar(v2_uv, inv_w2);
+        }
 
         Params params = 
         {
@@ -618,6 +654,7 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
 
         params.buffer = buffer;
         params.depth_buffer = depth_buffer;
+        params.render_flags = render_flags;
         barycentric_with_edge_stepping(&params);
     }
 }
@@ -798,7 +835,7 @@ UPDATE_AND_RENDER(update_and_render)
     clear_screen(buffer, steam_chat_background_color);
     clear_depth_buffer(depth_buffer);
     
-    // My idea here is the following. I'm trying to understand how the culling works so I know that if i have a triangle given in CCW
+    // My idea here is the following. I'm trying to understand how culling works so I know that if i have a triangle given in CCW
     // the same exact triangle when looking from the back its going to be seen as CW. So this depends on the view itself.
     // So I'm planning to make two examples: 
     //
@@ -818,7 +855,7 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 8;
+    u32 example = 9;
     if(example == 1)
     {
         // Example 1
@@ -845,7 +882,7 @@ UPDATE_AND_RENDER(update_and_render)
         Triangle triangles[2] = {cw_tri, ccw_tri};
         Mat4 view = mat4_identity();
         Mat4 persp = mat4_identity();
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
+        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
     }
     if(example == 2)
     {
@@ -879,7 +916,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
+        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
     }
     if(example == 3)
     {
@@ -912,7 +949,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles + 1, 1, view, persp);
+        provisionary_block(buffer, depth_buffer, triangles + 1, 1, view, persp, RenderFlags_Culling);
     }
     if(example == 4)
     {
@@ -944,7 +981,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp);
+        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_Culling);
     }
     if(example == 5)
     {
@@ -966,7 +1003,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, 0, 0, view, persp);
+        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, 0, 0, view, persp, RenderFlags_Culling);
     }
     if(example == 6)
     {
@@ -1002,7 +1039,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, texels, 4, view, persp);
+        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, texels, 4, view, persp, RenderFlags_Culling);
     }
     if(example == 7)
     {
@@ -1031,7 +1068,7 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp);
+        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling);
     }
     if(example == 8)
     {
@@ -1056,17 +1093,7 @@ UPDATE_AND_RENDER(update_and_render)
         example_8_angle += dt;
 
         Vec3 center = {0.5f, 0.25f, 2.5f};
-        f32 cy = cosf(example_8_angle);
-        f32 sy = sinf(example_8_angle);
-        f32 cx = cosf(example_8_angle * 0.5f);
-        f32 sx = sinf(example_8_angle * 0.5f);
-        for(u32 vertex_index = 0; vertex_index < 8; vertex_index++)
-        {
-            Vec3 p = vec3_sub(vertices[vertex_index].position, center);
-            p = vec3_rotate_y(p, cy, sy);
-            p = vec3_rotate_x(p, cx, sx);
-            vertices[vertex_index].position = vec3_add(p, center);
-        }
+        rotate_vertices_about_center(vertices, 8, center, example_8_angle, example_8_angle * 0.5f);
 
         camera_handle_movement(&game_state->camera, input, dt);
 
@@ -1076,9 +1103,55 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp);
+        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp, RenderFlags_TwoSidedRasterization);
     }
+    if(example == 9)
+    {
+        // Left strip uses perspective-correct UVs, right strip uses affine UVs.
+        u32 texels[4] = {
+            0xFF000000, 0xFFFFFFFF,
+            0xFFFFFFFF, 0xFF000000
+        };
+        u32 indices[12] = {0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7};
+        Vertex vertices_perspective[8] = {
+            (Vertex){ .position = {-1.15f, 0.0f, 3.0f }, .color = {255, 128, 128}, .uv = {0, 0}},
+            (Vertex){ .position = {-1.15f, 0.5f, 3.0f }, .color = {255, 128, 128}, .uv = {0, 1}},
+            (Vertex){ .position = {-0.65f, 0.0f, 3.0f }, .color = {255, 128, 128}, .uv = {1, 0}},
+            (Vertex){ .position = {-0.65f, 0.5f, 3.0f }, .color = {255, 128, 128}, .uv = {1, 1}},
+            (Vertex){ .position = {-0.65f, 0.0f, 3.0f }, .color = {128, 192, 255}, .uv = {0, 0}},
+            (Vertex){ .position = {-0.65f, 0.5f, 3.0f }, .color = {128, 192, 255}, .uv = {0, 1}},
+            (Vertex){ .position = {-0.15f, 0.0f, 3.0f }, .color = {128, 192, 255}, .uv = {1, 0}},
+            (Vertex){ .position = {-0.15f, 0.5f, 3.0f }, .color = {128, 192, 255}, .uv = {1, 1}},
+        };
+        Vertex vertices_affine[8] = {
+            (Vertex){ .position = {0.15f, 0.0f, 3.0f }, .color = {255, 128, 128}, .uv = {0, 0}},
+            (Vertex){ .position = {0.15f, 0.5f, 3.0f }, .color = {255, 128, 128}, .uv = {0, 1}},
+            (Vertex){ .position = {0.65f, 0.0f, 3.0f }, .color = {255, 128, 128}, .uv = {1, 0}},
+            (Vertex){ .position = {0.65f, 0.5f, 3.0f }, .color = {255, 128, 128}, .uv = {1, 1}},
+            (Vertex){ .position = {0.65f, 0.0f, 3.0f }, .color = {128, 192, 255}, .uv = {0, 0}},
+            (Vertex){ .position = {0.65f, 0.5f, 3.0f }, .color = {128, 192, 255}, .uv = {0, 1}},
+            (Vertex){ .position = {1.15f, 0.0f, 3.0f }, .color = {128, 192, 255}, .uv = {1, 0}},
+            (Vertex){ .position = {1.15f, 0.5f, 3.0f }, .color = {128, 192, 255}, .uv = {1, 1}},
+        };
 
+        static f32 example_9_time = 0.0f;
+        example_9_time += dt;
+        f32 angle_y = 0.85f * sinf(example_9_time);
+        f32 angle_x = 0.45f * cosf(example_9_time * 0.7f);
+        rotate_vertices_about_center(vertices_perspective, 8, (Vec3){-0.65f, 0.25f, 3.0f}, angle_y, angle_x);
+        rotate_vertices_about_center(vertices_affine, 8, (Vec3){0.65f, 0.25f, 3.0f}, angle_y, angle_x);
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592 / 3.0; // 60 deg
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 50.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(buffer, depth_buffer, vertices_perspective, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling);
+        provisionary_block2(buffer, depth_buffer, vertices_affine, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling | RenderFlags_AffineUVInterpolation);
+    }
     char buf[200];
     snprintf(buf, 200, "Running example: %d", example);
     draw_text(buffer, 4, 20, buf);
@@ -1113,5 +1186,9 @@ UPDATE_AND_RENDER(update_and_render)
         char buf[200];
         snprintf(buf, 200, "camera pitch and yaw: (%.2f, %.2f)", game_state->camera.pitch, game_state->camera.yaw);
         draw_text(buffer, 4, 95, buf);
+    }
+    if(example == 9)
+    {
+        draw_text(buffer, 4, 110, "Left: perspective correct | Right: affine");
     }
 }
