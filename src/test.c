@@ -231,6 +231,37 @@ static inline b32 is_top_left_edge(float dx, float dy)
 {
     return (dy > 0) || (dy == 0 && dx < 0);
 }
+
+internal b32
+triangle_screen_bounds(Software_Render_Buffer *buffer, Vec3 v0, Vec3 v1, Vec3 v2,
+                       f32 *min_x, f32 *max_x, f32 *min_y, f32 *max_y)
+{
+    if(!isfinite(v0.x) || !isfinite(v0.y) || !isfinite(v0.z) ||
+       !isfinite(v1.x) || !isfinite(v1.y) || !isfinite(v1.z) ||
+       !isfinite(v2.x) || !isfinite(v2.y) || !isfinite(v2.z))
+    {
+        return 0;
+    }
+
+    f32 raw_min_x = Min(Min(v0.x, v1.x), v2.x);
+    f32 raw_min_y = Min(Min(v0.y, v1.y), v2.y);
+    f32 raw_max_x = Max(Max(v0.x, v1.x), v2.x);
+    f32 raw_max_y = Max(Max(v0.y, v1.y), v2.y);
+
+    if(raw_max_x <= 0.0f || raw_min_x >= (f32)buffer->width ||
+       raw_max_y <= 0.0f || raw_min_y >= (f32)buffer->height)
+    {
+        return 0;
+    }
+
+    *min_x = Clamp(raw_min_x, 0.0f, (f32)buffer->width);
+    *max_x = Clamp(raw_max_x, 0.0f, (f32)buffer->width);
+    *min_y = Clamp(raw_min_y, 0.0f, (f32)buffer->height);
+    *max_y = Clamp(raw_max_y, 0.0f, (f32)buffer->height);
+
+    return (*min_x < *max_x) && (*min_y < *max_y);
+}
+
 internal void barycentric_with_edge_stepping(Params *params)
 {
     RendererProperties_Flags render_flags = params->render_flags;
@@ -261,6 +292,10 @@ internal void barycentric_with_edge_stepping(Params *params)
     Vec2F32 s1 = { (v1.x), (v1.y) };
     Vec2F32 s2 = { (v2.x), (v2.y) };
     f32 area = edge(s0, s1, s2);          // signed
+    if(!isfinite(area) || fabsf(area) <= EPSILON)
+    {
+        return;
+    }
 
     f32 inv_area = 1.0f / area;
     // edge stepping basically
@@ -465,14 +500,14 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
         ////// viewport transform //////
 
-        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
-        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
-        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
-        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
-        min_x = ClampBot(min_x, 0);
-        max_x = ClampTop(max_x, buffer->width);
-        min_y = ClampBot(min_y, 0);
-        max_y = ClampTop(max_y, buffer->height);
+        f32 min_x;
+        f32 min_y;
+        f32 max_x;
+        f32 max_y;
+        if(!triangle_screen_bounds(buffer, v0, v1, v2, &min_x, &max_x, &min_y, &max_y))
+        {
+            continue;
+        }
 
         Vec3 new_vv0_color = vec3_scalar((Vec3){255.0f, 0.0f, 0.0f}, inv_w0);
         Vec3 new_vv1_color = vec3_scalar((Vec3){0.0f, 255.0f, 0.0f}, inv_w1);
@@ -623,14 +658,14 @@ void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *
         v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
         ////// viewport transform //////
 
-        f32 min_x = Min(Min(v0.x, v1.x), v2.x);
-        f32 min_y = Min(Min(v0.y, v1.y), v2.y);
-        f32 max_x = Max(Max(v0.x, v1.x), v2.x);
-        f32 max_y = Max(Max(v0.y, v1.y), v2.y);
-        min_x = ClampBot(min_x, 0);
-        max_x = ClampTop(max_x, buffer->width);
-        min_y = ClampBot(min_y, 0);
-        max_y = ClampTop(max_y, buffer->height);
+        f32 min_x;
+        f32 min_y;
+        f32 max_x;
+        f32 max_y;
+        if(!triangle_screen_bounds(buffer, v0, v1, v2, &min_x, &max_x, &min_y, &max_y))
+        {
+            continue;
+        }
 
         Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
         Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
@@ -855,7 +890,16 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    u32 example = 9;
+    local_persist u32 example = 5;
+    if(input_is_key_just_pressed(input, Keys_Arrow_Left) && example > 1)
+    {
+        example--;
+    }
+    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && example < 9)
+    {
+        example++;
+    }
+
     if(example == 1)
     {
         // Example 1
