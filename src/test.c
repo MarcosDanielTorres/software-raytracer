@@ -23,6 +23,12 @@
 #include FT_FREETYPE_H
 #define internal static
 
+
+global Vec3 red = {255, 0, 0};
+global Vec3 green = {0, 255, 0};
+global Vec3 blue = {0, 0, 255};
+global Vec3 white = {255, 255, 255};
+global Vec3 yellow = {255, 255, 0};
 typedef struct Camera Camera;
 struct Camera
 {
@@ -72,6 +78,7 @@ struct FontInfo
     FontGlyph font_table[300];
 };
 
+typedef struct Vertex Vertex;
 typedef struct Game_State Game_State;
 struct Game_State
 {
@@ -80,7 +87,22 @@ struct Game_State
     Camera camera;
 
     u32 example;
+    u32 example12_lighting_mode;
     u32 culled_triangles;
+
+    Vertex *terrain_vertices;
+    u32 terrain_vertices_count;
+    u32 terrain_indices_count;
+    u32 *terrain_indices;
+};
+
+typedef u32 Example12LightingMode;
+enum
+{
+    Example12Lighting_Unlit,
+    Example12Lighting_Flat,
+    Example12Lighting_Gouraud,
+    Example12Lighting_Count,
 };
 
 typedef u32 RendererProperties_Flags;
@@ -155,6 +177,99 @@ multiply_color_u32_by_rgb8(u32 color, u8 tint_r, u8 tint_g, u8 tint_b)
     result |= r << 16;
     result |= g << 8;
     result |= b << 0;
+    return result;
+}
+
+internal f32
+saturate_f32(f32 value)
+{
+    if(value < 0.0f) return 0.0f;
+    if(value > 1.0f) return 1.0f;
+    return value;
+}
+
+internal Vec3
+vec3_lerp(Vec3 a, Vec3 b, f32 t)
+{
+    t = saturate_f32(t);
+    return (Vec3)
+    {
+        a.x + (b.x - a.x) * t,
+        a.y + (b.y - a.y) * t,
+        a.z + (b.z - a.z) * t,
+    };
+}
+
+internal Vec3
+color_scale(Vec3 color, f32 scale)
+{
+    return (Vec3){color.x * scale, color.y * scale, color.z * scale};
+}
+
+internal f32
+ps1_grass_height(f32 x, f32 z)
+{
+    f32 rolling = 1.35f + 0.22f * sinf(x * 0.42f) + 0.18f * cosf(z * 0.31f);
+    f32 ripple = 0.07f * sinf((x + z) * 0.35f);
+    f32 hill_dx = x + 3.5f;
+    f32 hill_dz = z - 15.0f;
+    f32 hill = 0.55f * expf(-(hill_dx * hill_dx + hill_dz * hill_dz) * 0.035f);
+    return rolling + ripple + hill;
+}
+
+
+internal Vec3
+ps1_grass_base_color(f32 x, f32 z, f32 y)
+{
+    f32 wave = 0.5f + 0.5f * sinf(x * 0.18f + z * 0.11f);
+    f32 height_factor = saturate_f32((y - 1.0f) / 1.2f);
+    Vec3 dark = {64.0f, 138.0f, 56.0f};
+    Vec3 bright = {103.0f, 186.0f, 82.0f};
+    Vec3 color = vec3_lerp(dark, bright, 0.30f + wave * 0.45f);
+    color = vec3_lerp(color, (Vec3){142.0f, 202.0f, 88.0f}, height_factor * 0.25f);
+    return color;
+}
+
+internal Vec3
+shade_directional(Vec3 base_color, Vec3 normal, Vec3 light_dir, f32 ambient, f32 diffuse)
+{
+    f32 intensity = ambient + diffuse * saturate_f32(vec3_dot(normal, light_dir));
+    return color_scale(base_color, intensity);
+}
+
+internal f32
+hash01(u32 seed)
+{
+    f32 value = sinf((f32)seed * 12.9898f + 78.233f) * 43758.5453f;
+    return value - floorf(value);
+}
+
+internal f32
+ease_out_cubic(f32 t)
+{
+    t = saturate_f32(t);
+    f32 inv_t = 1.0f - t;
+    return 1.0f - inv_t * inv_t * inv_t;
+}
+
+internal f32
+smoothstep_f32(f32 edge0, f32 edge1, f32 x)
+{
+    if(equal_f32(edge0, edge1))
+    {
+        return x >= edge1;
+    }
+
+    f32 t = saturate_f32((x - edge0) / (edge1 - edge0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+internal char *
+example12_lighting_mode_name(Example12LightingMode mode)
+{
+    char *result = "Unlit";
+    if(mode == Example12Lighting_Flat) result = "Flat";
+    if(mode == Example12Lighting_Gouraud) result = "Gouraud";
     return result;
 }
 
@@ -547,6 +662,94 @@ struct Vertex
     Vec3 color;
     Vec2 uv;
 };
+
+internal void
+push_triangle(Vertex *vertices, u32 max_vertices, u32 *vertex_count,
+              Vec3 p0, Vec3 p1, Vec3 p2,
+              Vec3 c0, Vec3 c1, Vec3 c2)
+{
+    assert((*vertex_count + 3) <= max_vertices);
+    vertices[*vertex_count + 0] = (Vertex){.position = p0, .color = c0, .uv = {0, 0}};
+    vertices[*vertex_count + 1] = (Vertex){.position = p1, .color = c1, .uv = {0, 0}};
+    vertices[*vertex_count + 2] = (Vertex){.position = p2, .color = c2, .uv = {0, 0}};
+    *vertex_count += 3;
+}
+
+internal void
+push_flat_triangle(Vertex *vertices, u32 max_vertices, u32 *vertex_count,
+                   Vec3 p0, Vec3 p1, Vec3 p2,
+                   Vec3 base_color, Vec3 light_dir, f32 ambient, f32 diffuse)
+{
+    Vec3 normal = vec3_normalize(vec3_cross(vec3_sub(p1, p0), vec3_sub(p2, p0)));
+    Vec3 color = shade_directional(base_color, normal, light_dir, ambient, diffuse);
+    push_triangle(vertices, max_vertices, vertex_count, p0, p1, p2, color, color, color);
+}
+
+internal void
+push_flat_quad(Vertex *vertices, u32 max_vertices, u32 *vertex_count,
+               Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3,
+               Vec3 base_color, Vec3 light_dir, f32 ambient, f32 diffuse)
+{
+    push_flat_triangle(vertices, max_vertices, vertex_count, p0, p1, p2, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, p0, p2, p3, base_color, light_dir, ambient, diffuse);
+}
+
+internal void
+push_flat_octahedron(Vertex *vertices, u32 max_vertices, u32 *vertex_count,
+                     Vec3 center, Vec3 radii, Vec3 base_color,
+                     Vec3 light_dir, f32 ambient, f32 diffuse)
+{
+    Vec3 top = {center.x, center.y - radii.y, center.z};
+    Vec3 bottom = {center.x, center.y + radii.y, center.z};
+    Vec3 east = {center.x + radii.x, center.y, center.z};
+    Vec3 west = {center.x - radii.x, center.y, center.z};
+    Vec3 north = {center.x, center.y, center.z + radii.z};
+    Vec3 south = {center.x, center.y, center.z - radii.z};
+
+    push_flat_triangle(vertices, max_vertices, vertex_count, top, east, north, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, top, north, west, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, top, west, south, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, top, south, east, base_color, light_dir, ambient, diffuse);
+
+    push_flat_triangle(vertices, max_vertices, vertex_count, bottom, north, east, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, bottom, west, north, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, bottom, south, west, base_color, light_dir, ambient, diffuse);
+    push_flat_triangle(vertices, max_vertices, vertex_count, bottom, east, south, base_color, light_dir, ambient, diffuse);
+}
+
+internal u32
+build_ps1_terrain_patch(Vertex *vertices, u32 max_vertices,
+                        u32 columns, u32 rows, f32 tile_width, f32 tile_depth,
+                        f32 start_x, f32 start_z,
+                        Example12LightingMode lighting_mode,
+                        Vec3 light_dir, f32 ambient, f32 diffuse)
+{
+    u32 vertex_count = 0;
+    for(u32 row = 0; row < rows; row++)
+    {
+        for(u32 column = 0; column < columns; column++)
+        {
+            f32 x0 = start_x + (f32)column * tile_width;
+            f32 x1 = x0 + tile_width;
+            f32 z0 = start_z + (f32)row * tile_depth;
+            f32 z1 = z0 + tile_depth;
+
+            Vec3 p00 = {x0, ps1_grass_height(x0, z0), z0};
+            Vec3 p10 = {x1, ps1_grass_height(x1, z0), z0};
+            Vec3 p01 = {x0, ps1_grass_height(x0, z1), z1};
+            Vec3 p11 = {x1, ps1_grass_height(x1, z1), z1};
+
+            Vec3 tri0_center = color_scale(vec3_add(vec3_add(p00, p10), p01), 1.0f / 3.0f);
+            Vec3 tri1_center = color_scale(vec3_add(vec3_add(p10, p11), p01), 1.0f / 3.0f);
+            Vec3 tri0_base = ps1_grass_base_color(tri0_center.x, tri0_center.z, tri0_center.y);
+            Vec3 tri1_base = ps1_grass_base_color(tri1_center.x, tri1_center.z, tri1_center.y);
+            push_flat_triangle(vertices, max_vertices, &vertex_count, p00, p10, p01, tri0_base, light_dir, ambient, diffuse);
+            push_flat_triangle(vertices, max_vertices, &vertex_count, p10, p11, p01, tri1_base, light_dir, ambient, diffuse);
+        }
+    }
+
+    return vertex_count;
+}
 
 internal void
 rotate_vertices_about_center(Vertex *vertices, u32 count, Vec3 center, f32 angle_y, f32 angle_x)
@@ -1000,7 +1203,8 @@ UPDATE_AND_RENDER(update_and_render)
         game_state->camera.position = (Vec3) {0.0, 0.0, 0.0};
         game_state->camera.forward = (Vec3) {0, 0, 1};
 
-        game_state->example = 1;
+        game_state->example = 13;
+        game_state->example12_lighting_mode = Example12Lighting_Flat;
         game_memory->init = 1;
     }
     LONGLONG frame_time_now = timer_get_os_time();
@@ -1032,7 +1236,7 @@ UPDATE_AND_RENDER(update_and_render)
     {
         game_state->example--;
     }
-    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && game_state->example < 10)
+    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && game_state->example < 13)
     {
         game_state->example++;
     }
@@ -1438,6 +1642,243 @@ UPDATE_AND_RENDER(update_and_render)
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block2(game_state, buffer, depth_buffer, vertices, floor_vertex_count, indices, floor_index_count, texels, 2, 2, view, persp, RenderFlags_Culling);
     }
+    if(game_state->example == 11)
+    {
+        //clear_screen(buffer, 0xFF8D86D9);
+        enum
+        {
+            terrain_columns = 36,
+            terrain_rows = 80,
+            max_scene_vertices = terrain_columns * terrain_rows * 2 * 3,
+        };
+
+        Vertex vertices[max_scene_vertices];
+        Vec3 light_dir = vec3_normalize((Vec3){-0.60f, -1.0f, 0.30f});
+        f32 ambient = 0.48f;
+        f32 diffuse = 0.60f;
+        Example12LightingMode lighting_mode = (Example12LightingMode)game_state->example12_lighting_mode;
+        u32 vertex_count = build_ps1_terrain_patch(vertices, max_scene_vertices,
+                                                   terrain_columns, terrain_rows, 0.95f, 0.95f,
+                                                   -7.6f, 4.2f,
+                                                   lighting_mode,
+                                                   light_dir, ambient, diffuse);
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592f / 3.0f;
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 60.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertex_count, 0, 0, 0, 0, 0, view, persp, RenderFlags_Culling);
+    }
+    if(game_state->example == 12)
+    {
+        clear_screen(buffer, 0xFF17111B);
+
+        enum
+        {
+            shock_segment_count = 14,
+            spike_count = 18,
+            smoke_count = 7,
+            max_scene_vertices = 600,
+        };
+
+        static f32 example_13_time = 0.0f;
+        if(input_is_key_just_pressed(input, Keys_R))
+        {
+            example_13_time = 0.0f;
+        }
+        example_13_time += dt;
+
+        f32 loop_duration = 2.8f;
+        f32 t = fmodf(example_13_time, loop_duration);
+        f32 burst = 1.0f - smoothstep_f32(0.18f, 1.05f, t);
+        f32 flash = 1.0f - smoothstep_f32(0.02f, 0.32f, t);
+        f32 smoke = ease_out_cubic(saturate_f32((t - 0.08f) / 1.45f));
+
+        Vertex vertices[max_scene_vertices];
+        u32 vertex_count = 0;
+        Vec3 light_dir = vec3_normalize((Vec3){-0.35f, -1.0f, 0.25f});
+        Vec3 center = {0.0f, 1.52f, 8.0f};
+        f32 ground_y = 1.95f;
+
+        push_flat_quad(vertices, max_scene_vertices, &vertex_count,
+                       (Vec3){-7.0f, ground_y, 4.0f},
+                       (Vec3){-7.0f, ground_y, 15.0f},
+                       (Vec3){ 7.0f, ground_y, 15.0f},
+                       (Vec3){ 7.0f, ground_y, 4.0f},
+                       (Vec3){54.0f, 43.0f, 36.0f},
+                       light_dir, 0.45f, 0.30f);
+
+        if(t < 0.95f)
+        {
+            f32 ring_outer = 0.35f + 3.6f * ease_out_cubic(saturate_f32(t / 0.62f));
+            f32 ring_inner = Max(0.0f, ring_outer - 0.22f);
+            Vec3 ring_inner_color = color_scale((Vec3){255.0f, 214.0f, 96.0f}, 0.55f + flash * 0.55f);
+            Vec3 ring_outer_color = color_scale((Vec3){196.0f, 82.0f, 30.0f}, 0.45f + burst * 0.35f);
+            f32 ring_y = ground_y - 0.02f;
+
+            for(u32 segment_index = 0; segment_index < shock_segment_count; segment_index++)
+            {
+                f32 angle0 = ((f32)segment_index / (f32)shock_segment_count) * 2.0f * 3.141592f;
+                f32 angle1 = ((f32)(segment_index + 1) / (f32)shock_segment_count) * 2.0f * 3.141592f;
+                Vec3 inner0 = {center.x + cosf(angle0) * ring_inner, ring_y, center.z + sinf(angle0) * ring_inner};
+                Vec3 inner1 = {center.x + cosf(angle1) * ring_inner, ring_y, center.z + sinf(angle1) * ring_inner};
+                Vec3 outer0 = {center.x + cosf(angle0) * ring_outer, ring_y, center.z + sinf(angle0) * ring_outer};
+                Vec3 outer1 = {center.x + cosf(angle1) * ring_outer, ring_y, center.z + sinf(angle1) * ring_outer};
+
+                push_triangle(vertices, max_scene_vertices, &vertex_count, inner0, outer0, inner1, ring_inner_color, ring_outer_color, ring_inner_color);
+                push_triangle(vertices, max_scene_vertices, &vertex_count, outer0, outer1, inner1, ring_outer_color, ring_outer_color, ring_inner_color);
+            }
+        }
+
+        {
+            Vec3 flash_color = color_scale((Vec3){255.0f, 238.0f, 176.0f}, 0.55f + flash * 0.75f);
+            Vec3 ember_color = color_scale((Vec3){255.0f, 118.0f, 32.0f}, 0.45f + burst * 0.45f);
+            f32 core_radius = 0.16f + flash * 0.42f;
+            push_flat_octahedron(vertices, max_scene_vertices, &vertex_count,
+                                 (Vec3){center.x, center.y - burst * 0.18f, center.z},
+                                 (Vec3){core_radius * 0.95f, core_radius * 1.18f, core_radius * 0.95f},
+                                 flash_color,
+                                 light_dir, 0.34f, 0.78f);
+            push_flat_octahedron(vertices, max_scene_vertices, &vertex_count,
+                                 (Vec3){center.x, center.y - burst * 0.10f, center.z},
+                                 (Vec3){core_radius * 1.45f, core_radius * 0.85f, core_radius * 1.45f},
+                                 ember_color,
+                                 light_dir, 0.34f, 0.78f);
+        }
+
+        for(u32 spike_index = 0; spike_index < spike_count; spike_index++)
+        {
+            f32 angle = hash01(spike_index * 11 + 3) * 2.0f * 3.141592f;
+            f32 spread = 0.75f + hash01(spike_index * 13 + 9) * 0.35f;
+            f32 lift = -0.22f - hash01(spike_index * 17 + 1) * 0.60f;
+            Vec3 dir = vec3_normalize((Vec3){cosf(angle) * spread, lift, sinf(angle) * spread});
+            Vec3 right = vec3_cross(dir, (Vec3){0.0f, 1.0f, 0.0f});
+            if(vec3_magnitude_squared(right) <= EPSILON)
+            {
+                right = (Vec3){1.0f, 0.0f, 0.0f};
+            }
+            right = vec3_normalize(right);
+
+            f32 spike_length = (0.75f + burst * 2.2f) * (0.70f + hash01(spike_index * 19 + 2) * 0.75f);
+            f32 spike_width = (0.07f + burst * 0.16f) * (0.80f + hash01(spike_index * 23 + 7) * 0.65f);
+            Vec3 tip = vec3_add(center, color_scale(dir, spike_length));
+            Vec3 p0 = vec3_add(center, color_scale(right, spike_width));
+            Vec3 p1 = vec3_sub(center, color_scale(right, spike_width));
+
+            Vec3 base_color = color_scale((Vec3){255.0f, 221.0f, 115.0f}, 0.55f + flash * 0.65f);
+            Vec3 tip_color = color_scale((Vec3){235.0f, 75.0f, 18.0f}, 0.48f + burst * 0.55f);
+            push_triangle(vertices, max_scene_vertices, &vertex_count, p0, p1, tip, base_color, base_color, tip_color);
+        }
+
+        for(u32 smoke_index = 0; smoke_index < smoke_count; smoke_index++)
+        {
+            f32 angle = hash01(smoke_index * 31 + 5) * 2.0f * 3.141592f;
+            f32 drift = smoke * (0.35f + hash01(smoke_index * 29 + 8) * 1.4f);
+            f32 rise = smoke * (0.55f + hash01(smoke_index * 37 + 2) * 1.35f);
+            f32 scale = 0.22f + smoke * 0.34f;
+
+            Vec3 puff_center =
+            {
+                center.x + cosf(angle) * drift,
+                center.y - 0.18f - rise,
+                center.z + sinf(angle) * drift,
+            };
+            Vec3 puff_color = vec3_lerp((Vec3){168.0f, 110.0f, 68.0f}, (Vec3){74.0f, 74.0f, 79.0f}, smoke);
+            push_flat_octahedron(vertices, max_scene_vertices, &vertex_count,
+                                 puff_center,
+                                 (Vec3){scale, scale * 0.85f, scale},
+                                 puff_color,
+                                 light_dir, 0.46f, 0.42f);
+        }
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592f / 3.0f;
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 40.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertex_count, 0, 0, 0, 0, 0, view, persp, RenderFlags_TwoSidedRasterization);
+    }
+    if(game_state->example == 13)
+    {
+        Vec3 colors[] = {
+            red,
+            green,
+            blue ,
+            white,
+            yellow,
+        };
+
+        local_persist b32 generated = 0;
+        local_persist u32 color_indexer = 0;
+        if(!generated)
+        {
+            Vec3 light_dir = vec3_normalize((Vec3){-0.60f, -1.0f, 0.30f});
+            f32 ambient = 0.48f;
+            f32 diffuse = 0.60f;
+            game_state->terrain_vertices_count = 0;
+            game_state->terrain_indices_count = 0;
+            game_state->terrain_vertices = malloc(sizeof(Vertex) * 40000);
+            game_state->terrain_indices = malloc(sizeof(u32) * 40000);
+            Vec3 start = {0};
+            for(u32 row = 0; row < 40; row++)
+            {
+                for(u32 col = 0; col < 40; col++)
+                {
+                    Vec3 offset = vec3_add(start, (Vec3) {.x = col * 0.5f, .y = 0, .z = row * 0.5f});
+                    f32 x0 = offset.x;
+                    f32 x1 = offset.x + 0.5f;
+                    f32 z0 = offset.z;
+                    f32 z1 = offset.z + 0.5f;
+                    Vec3 p00 = {x0, ps1_grass_height(x0, z0), z0};
+                    Vec3 p10 = {x1, ps1_grass_height(x1, z0), z0};
+                    Vec3 p01 = {x0, ps1_grass_height(x0, z1), z1};
+                    Vec3 p11 = {x1, ps1_grass_height(x1, z1), z1};
+                    Vec3 tri0_center = color_scale(vec3_add(vec3_add(p00, p10), p01), 1.0f / 3.0f);
+                    Vec3 tri1_center = color_scale(vec3_add(vec3_add(p10, p11), p01), 1.0f / 3.0f);
+                    Vec3 tri0_base = ps1_grass_base_color(tri0_center.x, tri0_center.z, tri0_center.y);
+                    Vec3 tri1_base = ps1_grass_base_color(tri1_center.x, tri1_center.z, tri1_center.y);
+                    Vec3 tri0_normal = vec3_normalize(vec3_cross(vec3_sub(p10, p00), vec3_sub(p01, p00)));
+                    Vec3 tri1_normal = vec3_normalize(vec3_cross(vec3_sub(p11, p10), vec3_sub(p01, p10)));
+                    Vec3 tri0_color = shade_directional(tri0_base, tri0_normal, light_dir, ambient, diffuse);
+                    Vec3 tri1_color = shade_directional(tri1_base, tri1_normal, light_dir, ambient, diffuse);
+                    Vec3 shared_color = color_scale(vec3_add(tri0_color, tri1_color), 0.5f);
+                    color_indexer = color_indexer++ % ArrayCount(colors);
+                    game_state->terrain_vertices[game_state->terrain_vertices_count + 0] = (Vertex){ .position = vec3_add(offset, (Vec3) { 0.0f, p01.y, 0.5f }),  .color = shared_color};
+                    game_state->terrain_vertices[game_state->terrain_vertices_count + 1] = (Vertex){ .position = vec3_add(offset, (Vec3) { 0.0f, p00.y, 0.0f }),  .color = tri0_color};
+                    game_state->terrain_vertices[game_state->terrain_vertices_count + 2] = (Vertex){ .position = vec3_add(offset, (Vec3) { 0.5f, p10.y, 0.0f }),  .color = shared_color};
+                    game_state->terrain_vertices[game_state->terrain_vertices_count + 3] = (Vertex){ .position = vec3_add(offset, (Vec3) { 0.5f, p11.y, 0.5f }),  .color = tri1_color};
+
+                    game_state->terrain_indices[game_state->terrain_indices_count + 0] = game_state->terrain_vertices_count + 0;
+                    game_state->terrain_indices[game_state->terrain_indices_count + 1] = game_state->terrain_vertices_count + 1;
+                    game_state->terrain_indices[game_state->terrain_indices_count + 2] = game_state->terrain_vertices_count + 2;
+                    game_state->terrain_indices[game_state->terrain_indices_count + 3] = game_state->terrain_vertices_count + 0;
+                    game_state->terrain_indices[game_state->terrain_indices_count + 4] = game_state->terrain_vertices_count + 2;
+                    game_state->terrain_indices[game_state->terrain_indices_count + 5] = game_state->terrain_vertices_count + 3;
+                    game_state->terrain_vertices_count += 4;
+                    game_state->terrain_indices_count += 6;
+                }
+            }
+            generated = 1;
+        }
+
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592f / 3.0f;
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 40.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        provisionary_block2(game_state, buffer, depth_buffer, game_state->terrain_vertices, game_state->terrain_vertices_count, game_state->terrain_indices, game_state->terrain_indices_count, 0, 0, 0, view, persp, RenderFlags_TwoSidedRasterization);
+    }
+
     char buf[200];
     snprintf(buf, 200, "Running example: %d", game_state->example);
     draw_text(buffer, 4, 20, buf);
@@ -1480,6 +1921,16 @@ UPDATE_AND_RENDER(update_and_render)
     if(game_state->example == 10)
     {
         draw_text(buffer, 4, 110, "Tiled checker floor with repeating tint palette");
+    }
+    if(game_state->example == 12)
+    {
+        char lighting_buf[200];
+        snprintf(lighting_buf, ArrayCount(lighting_buf), "Lighting mode: %s (Arrow Up/Down)", example12_lighting_mode_name((Example12LightingMode)game_state->example12_lighting_mode));
+        draw_text(buffer, 4, 110, lighting_buf);
+    }
+    if(game_state->example == 13)
+    {
+        draw_text(buffer, 4, 110, "Stylized explosion test (R to restart)");
     }
     if(game_state->culled_triangles)
     {
