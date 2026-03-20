@@ -7,7 +7,7 @@ del *.pdb > NUL 2> NUL
 
 set test=1
 set compiler=cl
-set mode=release
+set mode=debug
 set game_link_flags=/link -incremental:no -opt:ref /EXPORT:update_and_render libfreetype-r.lib
 set engine_link_flags=/link -incremental:no -opt:ref user32.lib gdi32.lib
 

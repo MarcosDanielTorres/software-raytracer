@@ -23,6 +23,66 @@
 #include FT_FREETYPE_H
 #define internal static
 
+typedef struct Camera Camera;
+struct Camera
+{
+    Vec3 position;
+    Vec3 forward;
+    Vec3 right;
+    f32 pitch;
+    f32 yaw;
+};
+
+typedef struct Bitmap Bitmap;
+struct Bitmap {
+    i32 width;
+    i32 height;
+    i32 pitch;
+    u8* buffer;
+};
+
+typedef struct FontGlyph FontGlyph;
+struct FontGlyph {
+    Bitmap bitmap;
+    i32 bitmap_top;
+    i32 bitmap_left;
+    i32 advance_x;
+
+    f32 uv0_x;
+    f32 uv1_x;
+    f32 uv2_x;
+    f32 uv3_x;
+
+    f32 uv0_y;
+    f32 uv1_y;
+    f32 uv2_y;
+    f32 uv3_y;
+};
+
+typedef struct FontInfo FontInfo;
+struct FontInfo
+{
+    i32 ascent;
+    i32 descent;
+    i32 line_height;
+    i32 max_glyph_width;
+    i32 max_glyph_height;
+    // probably renamed to max_char_advancement (same in monospace)
+    i32 max_char_width;
+    FontGlyph font_table[300];
+};
+
+typedef struct Game_State Game_State;
+struct Game_State
+{
+    Arena *arena;
+    FontInfo font_info;
+    Camera camera;
+
+    u32 example;
+    u32 culled_triangles;
+};
+
 typedef u32 RendererProperties_Flags;
 enum
 {
@@ -71,14 +131,6 @@ struct Triangle
     f32 sign_area;
 };
 
-typedef struct Bitmap Bitmap;
-struct Bitmap {
-    i32 width;
-    i32 height;
-    i32 pitch;
-    u8* buffer;
-};
-
 internal u8
 clamp_u8_from_f32(f32 value)
 {
@@ -105,37 +157,6 @@ multiply_color_u32_by_rgb8(u32 color, u8 tint_r, u8 tint_g, u8 tint_b)
     result |= b << 0;
     return result;
 }
-
-typedef struct FontGlyph FontGlyph;
-struct FontGlyph {
-    Bitmap bitmap;
-    i32 bitmap_top;
-    i32 bitmap_left;
-    i32 advance_x;
-
-    f32 uv0_x;
-    f32 uv1_x;
-    f32 uv2_x;
-    f32 uv3_x;
-
-    f32 uv0_y;
-    f32 uv1_y;
-    f32 uv2_y;
-    f32 uv3_y;
-};
-
-typedef struct FontInfo FontInfo;
-struct FontInfo
-{
-    i32 ascent;
-    i32 descent;
-    i32 line_height;
-    i32 max_glyph_width;
-    i32 max_glyph_height;
-    // probably renamed to max_char_advancement (same in monospace)
-    i32 max_char_width;
-    FontGlyph font_table[300];
-};
 
 global FontInfo font_info;
 internal void draw_text(Software_Render_Buffer *buffer, u32 x, u32 baseline, char *text)
@@ -227,11 +248,6 @@ static inline b32 is_top_left(Vec2F32 a, Vec2F32 b)
     return (a.y > b.y) || (a.y == b.y && a.x < b.x);
 }
 
-static inline b32 is_top_left_edge(float dx, float dy)
-{
-    return (dy > 0) || (dy == 0 && dx < 0);
-}
-
 internal b32
 triangle_screen_bounds(Software_Render_Buffer *buffer, Vec3 v0, Vec3 v1, Vec3 v2,
                        f32 *min_x, f32 *max_x, f32 *min_y, f32 *max_y)
@@ -282,12 +298,6 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 min_y = params->min_y;
     f32 max_y = params->max_y;
 
-    //Vec2F32 s0 = { floor(v0.x) + 0.5f, floor(v0.y) + 0.5f };
-    //Vec2F32 s1 = { floor(v1.x) + 0.5f, floor(v1.y) + 0.5f };
-    //Vec2F32 s2 = { floor(v2.x) + 0.5f, floor(v2.y) + 0.5f };
-    //Vec2F32 s0 = { v0.x + 0.5f, (v0.y) + 0.5f };
-    //Vec2F32 s1 = { (v1.x) + 0.5f, (v1.y) + 0.5f };
-    //Vec2F32 s2 = { (v2.x) + 0.5f, (v2.y) + 0.5f };
     Vec2F32 s0 = { v0.x , (v0.y) };
     Vec2F32 s1 = { (v1.x), (v1.y) };
     Vec2F32 s2 = { (v2.x), (v2.y) };
@@ -317,9 +327,9 @@ internal void barycentric_with_edge_stepping(Params *params)
     f32 row_w1 = edge(s2, s0, p0);
     f32 row_w2 = edge(s0, s1, p0);
 
-    b32 e0_inc = is_top_left(s1, s2);
-    b32 e1_inc = is_top_left(s2, s0);
-    b32 e2_inc = is_top_left(s0, s1);
+    i32 e0_inc = is_top_left(s1, s2);
+    i32 e1_inc = is_top_left(s2, s0);
+    i32 e2_inc = is_top_left(s0, s1);
 
     const f32 eps = -1e-4f;
     int lx, hx, ly, hy;
@@ -333,10 +343,12 @@ internal void barycentric_with_edge_stepping(Params *params)
             u32 *color_row = params->buffer->data + params->buffer->width * y + x_min;
             for (u32 x = x_min; x < x_max; x++)
             {
+                #if 1
                 b32 inside_pos =
                     (e0_inc ? w0 >= 0.f : w0 > eps) &&
                     (e1_inc ? w1 >= 0.f : w1 > eps) &&
                     (e2_inc ? w2 >= 0.f : w2 > eps);
+                #endif
                 b32 inside = inside_pos;
                 if(render_flags & RenderFlags_TwoSidedRasterization)
                 {
@@ -346,10 +358,9 @@ internal void barycentric_with_edge_stepping(Params *params)
                         (e2_inc ? w2 <= 0.f : w2 < -eps);
                     inside = inside_pos || inside_neg;
                 }
+                
                 if (inside)
                 {
-                    // area here is always less than 0
-                    //printf("%d\n", area > 0 ? 1 : 0);
                     f32 b0 = w0 * inv_area;
                     f32 b1 = w1 * inv_area;
                     f32 b2 = w2 * inv_area;
@@ -395,8 +406,6 @@ internal void barycentric_with_edge_stepping(Params *params)
                             out_color = (0xFFu << 24) | ((u32)tint_r << 16) | ((u32)tint_g << 8) | ((u32)tint_b << 0);
                         }
                         draw_pixel(params->buffer, x, y, out_color);
-                        //memcpy((void*)&color_row[x - x_min], &out_color, 4);
-                        //color_row[x - x_min] = out_color;
                     }
                 }
                 w0 += e0_dx; w1 += e1_dx; w2 += e2_dx; // step right
@@ -441,7 +450,7 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
         // Clipping
         if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
         {
-            printf("clipping triangle %d\n", i);
+            //printf("clipping triangle %d\n", i);
             continue;
         }
         // Clipping
@@ -555,143 +564,287 @@ rotate_vertices_about_center(Vertex *vertices, u32 count, Vec3 center, f32 angle
     }
 }
 
-void provisionary_block2(Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_count, Mat4 view, Mat4 persp, RendererProperties_Flags render_flags)
+void provisionary_block2(Game_State *game_state, Software_Render_Buffer *buffer, Software_Depth_Buffer *depth_buffer, Vertex* vertices, u32 vertices_count, u32* indices, u32 indices_count, u32 *texels, u32 texels_width, u32 texels_height, Mat4 view, Mat4 persp, RendererProperties_Flags render_flags)
 {
-    for(u32 i = 0; i < indices_count; i+=3)
+    if (indices)
     {
-        Vertex vertex0 = vertices[indices[i]];
-        Vertex vertex1 = vertices[indices[i + 1]];
-        Vertex vertex2 = vertices[indices[i + 2]];
-
-        Vec3 v0 = vertex0.position;
-        Vec3 v1 = vertex1.position;
-        Vec3 v2 = vertex2.position;
-
-        Vec2 v0_uv = vertex0.uv;
-        Vec2 v1_uv = vertex1.uv;
-        Vec2 v2_uv = vertex2.uv;
-
-        Triangle triangle = {v0, v1, v2};
-        
-        ////// view matrix ///////
-        Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
-        Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
-        Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
-        Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
-        Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
-        Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
-        ////// view matrix ///////
-
-        ////// projection matrix ///////
-        f32 inv_w0;
-        f32 inv_w1;
-        f32 inv_w2;
-        // remember that the projection matrix stores de viewspace z value in its w
-        // but the result vector is in clip space so z of the view matrix is in clip space, not in 
-        // viewspace, they are not the same zz
-        //  The near plane of the perspective matrix is 1 and the far plane is 50
-        transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
-        transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
-        transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
-        // Clip here, in clip space and before the perspective divide. Triangles fully outside
-        // the frustum can be rejected here, and triangles crossing the near plane should be
-        // split/intersected here; dividing first can make vertices behind the camera look valid.
-        // Clipping
-        if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
+        for(u32 i = 0; i < indices_count; i+=3)
         {
-            printf("clipping triangle %d\n", i);
-            continue;
+            Vertex vertex0 = vertices[indices[i]];
+            Vertex vertex1 = vertices[indices[i + 1]];
+            Vertex vertex2 = vertices[indices[i + 2]];
+
+            Vec3 v0 = vertex0.position;
+            Vec3 v1 = vertex1.position;
+            Vec3 v2 = vertex2.position;
+
+            Vec2 v0_uv = vertex0.uv;
+            Vec2 v1_uv = vertex1.uv;
+            Vec2 v2_uv = vertex2.uv;
+
+            Triangle triangle = {v0, v1, v2};
+            
+            ////// view matrix ///////
+            Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+            Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+            Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+            Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+            Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+            Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+            ////// view matrix ///////
+
+            ////// projection matrix ///////
+            f32 inv_w0;
+            f32 inv_w1;
+            f32 inv_w2;
+            // remember that the projection matrix stores de viewspace z value in its w
+            // but the result vector is in clip space so z of the view matrix is in clip space, not in 
+            // viewspace, they are not the same zz
+            //  The near plane of the perspective matrix is 1 and the far plane is 50
+            transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+            transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+            transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+            // Clip here, in clip space and before the perspective divide. Triangles fully outside
+            // the frustum can be rejected here, and triangles crossing the near plane should be
+            // split/intersected here; dividing first can make vertices behind the camera look valid.
+            // Clipping
+            if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
+            {
+                //printf("clipping triangle %d\n", i);
+                continue;
+            }
+            // Clipping
+
+
+            if(transformed_v0.w != 0)
+            {
+                inv_w0 = 1.0f / transformed_v0.w;
+                transformed_v0.x *= inv_w0;
+                transformed_v0.y *= inv_w0;
+                transformed_v0.z *= inv_w0;
+            }
+            
+            if(transformed_v1.w != 0)
+            {
+                inv_w1 = 1.0f / transformed_v1.w;
+                transformed_v1.x *= inv_w1;
+                transformed_v1.y *= inv_w1;
+                transformed_v1.z *= inv_w1;
+            }
+            
+            if(transformed_v2.w != 0)
+            {
+                inv_w2 = 1.0f / transformed_v2.w;
+                transformed_v2.x *= inv_w2;
+                transformed_v2.y *= inv_w2;
+                transformed_v2.z *= inv_w2;
+            }
+
+            v0.x = transformed_v0.x;
+            v0.y = transformed_v0.y;
+            v0.z = transformed_v0.z;
+
+            v1.x = transformed_v1.x;
+            v1.y = transformed_v1.y;
+            v1.z = transformed_v1.z;
+
+            v2.x = transformed_v2.x;
+            v2.y = transformed_v2.y;
+            v2.z = transformed_v2.z;
+            ////// projection matrix ///////
+
+            // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
+            f32 sign_area = orient_2d_v3(v0, v1, v2);
+            if((render_flags & RenderFlags_Culling) && sign_area > 0)
+            {
+                game_state->culled_triangles++;
+                continue;
+            }
+
+            ////// viewport transform //////
+            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+            v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
+            v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
+            v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
+            ////// viewport transform //////
+
+            f32 min_x;
+            f32 min_y;
+            f32 max_x;
+            f32 max_y;
+            if(!triangle_screen_bounds(buffer, v0, v1, v2, &min_x, &max_x, &min_y, &max_y))
+            {
+                continue;
+            }
+
+            Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
+            Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
+            Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
+            if((render_flags & RenderFlags_AffineUVInterpolation) == 0)
+            {
+                v0_uv = vec2_scalar(v0_uv, inv_w0);
+                v1_uv = vec2_scalar(v1_uv, inv_w1);
+                v2_uv = vec2_scalar(v2_uv, inv_w2);
+            }
+
+            Params params = 
+            {
+                view, persp,
+                v0, v1, v2,
+                new_vv0_color, new_vv1_color, new_vv2_color,
+                v0_uv, v1_uv, v2_uv, texels, texels_width, texels_height,
+                inv_w0, inv_w1, inv_w2,
+                min_x, max_x, min_y, max_y
+            };
+
+            params.buffer = buffer;
+            params.depth_buffer = depth_buffer;
+            params.render_flags = render_flags;
+            barycentric_with_edge_stepping(&params);
         }
-        // Clipping
-
-
-        if(transformed_v0.w != 0)
+    }
+    else 
+    {
+        for(u32 i = 0; i < vertices_count; i+=3)
         {
-            inv_w0 = 1.0f / transformed_v0.w;
-            transformed_v0.x *= inv_w0;
-            transformed_v0.y *= inv_w0;
-            transformed_v0.z *= inv_w0;
+            Vertex vertex0 = vertices[i];
+            Vertex vertex1 = vertices[i + 1];
+            Vertex vertex2 = vertices[i + 2];
+
+            Vec3 v0 = vertex0.position;
+            Vec3 v1 = vertex1.position;
+            Vec3 v2 = vertex2.position;
+
+            Vec2 v0_uv = vertex0.uv;
+            Vec2 v1_uv = vertex1.uv;
+            Vec2 v2_uv = vertex2.uv;
+
+            Triangle triangle = {v0, v1, v2};
+            
+            ////// view matrix ///////
+            Vec4 transformed_v0 = mat4_mul_vec4(view, (Vec4){.x = v0.x, .y = v0.y, .z = v0.z, .w = 1});
+            Vec4 transformed_v1 = mat4_mul_vec4(view, (Vec4){.x = v1.x, .y = v1.y, .z = v1.z, .w = 1});
+            Vec4 transformed_v2 = mat4_mul_vec4(view, (Vec4){.x = v2.x, .y = v2.y, .z = v2.z, .w = 1});
+            Vec3 transformed_v0_v3 = (Vec3) {transformed_v0.x, transformed_v0.y, transformed_v0.z};
+            Vec3 transformed_v1_v3 = (Vec3) {transformed_v1.x, transformed_v1.y, transformed_v1.z};
+            Vec3 transformed_v2_v3 = (Vec3) {transformed_v2.x, transformed_v2.y, transformed_v2.z};
+            ////// view matrix ///////
+
+            ////// projection matrix ///////
+            f32 inv_w0;
+            f32 inv_w1;
+            f32 inv_w2;
+            // remember that the projection matrix stores de viewspace z value in its w
+            // but the result vector is in clip space so z of the view matrix is in clip space, not in 
+            // viewspace, they are not the same zz
+            //  The near plane of the perspective matrix is 1 and the far plane is 50
+            transformed_v0 = mat4_mul_vec4(persp, transformed_v0);
+            transformed_v1 = mat4_mul_vec4(persp, transformed_v1);
+            transformed_v2 = mat4_mul_vec4(persp, transformed_v2);
+            // Clip here, in clip space and before the perspective divide. Triangles fully outside
+            // the frustum can be rejected here, and triangles crossing the near plane should be
+            // split/intersected here; dividing first can make vertices behind the camera look valid.
+            // Clipping
+            if(transformed_v0.w < 0.1 || transformed_v1.w < 0.1 || transformed_v2.w < 0.1)
+            {
+                //printf("clipping triangle %d\n", i);
+                continue;
+            }
+            // Clipping
+
+
+            if(transformed_v0.w != 0)
+            {
+                inv_w0 = 1.0f / transformed_v0.w;
+                transformed_v0.x *= inv_w0;
+                transformed_v0.y *= inv_w0;
+                transformed_v0.z *= inv_w0;
+            }
+            
+            if(transformed_v1.w != 0)
+            {
+                inv_w1 = 1.0f / transformed_v1.w;
+                transformed_v1.x *= inv_w1;
+                transformed_v1.y *= inv_w1;
+                transformed_v1.z *= inv_w1;
+            }
+            
+            if(transformed_v2.w != 0)
+            {
+                inv_w2 = 1.0f / transformed_v2.w;
+                transformed_v2.x *= inv_w2;
+                transformed_v2.y *= inv_w2;
+                transformed_v2.z *= inv_w2;
+            }
+
+            v0.x = transformed_v0.x;
+            v0.y = transformed_v0.y;
+            v0.z = transformed_v0.z;
+
+            v1.x = transformed_v1.x;
+            v1.y = transformed_v1.y;
+            v1.z = transformed_v1.z;
+
+            v2.x = transformed_v2.x;
+            v2.y = transformed_v2.y;
+            v2.z = transformed_v2.z;
+            ////// projection matrix ///////
+
+            // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
+            f32 sign_area = orient_2d_v3(v0, v1, v2);
+            if((render_flags & RenderFlags_Culling) && sign_area > 0)
+            {
+                game_state->culled_triangles++;
+                continue;
+            }
+
+            ////// viewport transform //////
+            v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
+            v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
+            v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
+            v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
+            v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
+            v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
+            ////// viewport transform //////
+
+            f32 min_x;
+            f32 min_y;
+            f32 max_x;
+            f32 max_y;
+            if(!triangle_screen_bounds(buffer, v0, v1, v2, &min_x, &max_x, &min_y, &max_y))
+            {
+                continue;
+            }
+
+            Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
+            Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
+            Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
+            if((render_flags & RenderFlags_AffineUVInterpolation) == 0)
+            {
+                v0_uv = vec2_scalar(v0_uv, inv_w0);
+                v1_uv = vec2_scalar(v1_uv, inv_w1);
+                v2_uv = vec2_scalar(v2_uv, inv_w2);
+            }
+
+            Params params = 
+            {
+                view, persp,
+                v0, v1, v2,
+                new_vv0_color, new_vv1_color, new_vv2_color,
+                v0_uv, v1_uv, v2_uv, texels, texels_width, texels_height,
+                inv_w0, inv_w1, inv_w2,
+                min_x, max_x, min_y, max_y
+            };
+
+            params.buffer = buffer;
+            params.depth_buffer = depth_buffer;
+            params.render_flags = render_flags;
+            barycentric_with_edge_stepping(&params);
+
+
         }
-        
-        if(transformed_v1.w != 0)
-        {
-            inv_w1 = 1.0f / transformed_v1.w;
-            transformed_v1.x *= inv_w1;
-            transformed_v1.y *= inv_w1;
-            transformed_v1.z *= inv_w1;
-        }
-        
-        if(transformed_v2.w != 0)
-        {
-            inv_w2 = 1.0f / transformed_v2.w;
-            transformed_v2.x *= inv_w2;
-            transformed_v2.y *= inv_w2;
-            transformed_v2.z *= inv_w2;
-        }
-
-        v0.x = transformed_v0.x;
-        v0.y = transformed_v0.y;
-        v0.z = transformed_v0.z;
-
-        v1.x = transformed_v1.x;
-        v1.y = transformed_v1.y;
-        v1.z = transformed_v1.z;
-
-        v2.x = transformed_v2.x;
-        v2.y = transformed_v2.y;
-        v2.z = transformed_v2.z;
-        ////// projection matrix ///////
-
-        // @Performance This could be done before or after the viewport transform as long as the viewport doesnt flip Y
-        f32 sign_area = orient_2d_v3(v0, v1, v2);
-        if((render_flags & RenderFlags_Culling) && sign_area > 0)
-        {
-            printf("Culling triangle %d with sign area: %.2f\n", i, sign_area);
-            continue;
-        }
-
-        ////// viewport transform //////
-        v0.x = (v0.x * 0.5f + 0.5f) * buffer->width;
-        v1.x = (v1.x * 0.5f + 0.5f) * buffer->width;
-        v2.x = (v2.x * 0.5f + 0.5f) * buffer->width;
-        v0.y = (v0.y * 0.5f + 0.5f) * buffer->height;
-        v1.y = (v1.y * 0.5f + 0.5f) * buffer->height;
-        v2.y = (v2.y * 0.5f + 0.5f) * buffer->height;
-        ////// viewport transform //////
-
-        f32 min_x;
-        f32 min_y;
-        f32 max_x;
-        f32 max_y;
-        if(!triangle_screen_bounds(buffer, v0, v1, v2, &min_x, &max_x, &min_y, &max_y))
-        {
-            continue;
-        }
-
-        Vec3 new_vv0_color = vec3_scalar(vertex0.color, inv_w0);
-        Vec3 new_vv1_color = vec3_scalar(vertex1.color, inv_w1);
-        Vec3 new_vv2_color = vec3_scalar(vertex2.color, inv_w2);
-        if((render_flags & RenderFlags_AffineUVInterpolation) == 0)
-        {
-            v0_uv = vec2_scalar(v0_uv, inv_w0);
-            v1_uv = vec2_scalar(v1_uv, inv_w1);
-            v2_uv = vec2_scalar(v2_uv, inv_w2);
-        }
-
-        Params params = 
-        {
-            view, persp,
-            v0, v1, v2,
-            new_vv0_color, new_vv1_color, new_vv2_color,
-            v0_uv, v1_uv, v2_uv, texels, 2, 2,
-            inv_w0, inv_w1, inv_w2,
-            min_x, max_x, min_y, max_y
-        };
-
-        params.buffer = buffer;
-        params.depth_buffer = depth_buffer;
-        params.render_flags = render_flags;
-        barycentric_with_edge_stepping(&params);
     }
 }
 FontGlyph font_load_glyph(FT_Face face, char codepoint, FontInfo *info) {
@@ -733,23 +886,6 @@ FontGlyph font_load_glyph(FT_Face face, char codepoint, FontInfo *info) {
     return result;
 }
 
-typedef struct Camera Camera;
-struct Camera
-{
-    Vec3 position;
-    Vec3 forward;
-    Vec3 right;
-    f32 pitch;
-    f32 yaw;
-};
-
-typedef struct Game_State Game_State;
-struct Game_State
-{
-    Arena *arena;
-    FontInfo font_info;
-    Camera camera;
-};
 
 internal void
 camera_handle_movement(Camera *camera, Game_Input *input, f32 dt)
@@ -809,13 +945,13 @@ UPDATE_AND_RENDER(update_and_render)
 {
     Game_State *game_state = (Game_State*)game_memory->persistent_memory;
     font_info = game_state->font_info;
+    timer_init();
     if(!game_memory->init)
     {
         printf("init\n");
         game_state->arena = arena_alloc_with_base(game_memory->persistent_memory_size - sizeof(Game_State), (u8*)game_memory->persistent_memory + sizeof(Game_State));
         Arena *arena = game_state->arena;
 
-        timer_init();
         {
             FT_Library library;
             FT_Error error = FT_Init_FreeType(&library);
@@ -861,9 +997,10 @@ UPDATE_AND_RENDER(update_and_render)
             }
         }
 
-
         game_state->camera.position = (Vec3) {0.0, 0.0, 0.0};
         game_state->camera.forward = (Vec3) {0, 0, 1};
+
+        game_state->example = 1;
         game_memory->init = 1;
     }
     LONGLONG frame_time_now = timer_get_os_time();
@@ -891,17 +1028,16 @@ UPDATE_AND_RENDER(update_and_render)
     // My viewport transforms maps from -1 to 1 on x and y that means that my vertices should be between
     // [-1, 1] for both x and y.
 
-    local_persist u32 example = 5;
-    if(input_is_key_just_pressed(input, Keys_Arrow_Left) && example > 1)
+    if(input_is_key_just_pressed(input, Keys_Arrow_Left) && game_state->example > 1)
     {
-        example--;
+        game_state->example--;
     }
-    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && example < 10)
+    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && game_state->example < 10)
     {
-        example++;
+        game_state->example++;
     }
 
-    if(example == 1)
+    if(game_state->example == 1)
     {
         // Example 1
         // here are two triangles one is ccw and the other cw
@@ -927,9 +1063,18 @@ UPDATE_AND_RENDER(update_and_render)
         Triangle triangles[2] = {cw_tri, ccw_tri};
         Mat4 view = mat4_identity();
         Mat4 persp = mat4_identity();
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
+        //provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
+        Vertex vertices[6] = {
+            (Vertex) {.position = cw_tri.v0  , .color = {255, 0, 0}},
+            (Vertex) {.position = cw_tri.v1  , .color = {0, 255, 0}},
+            (Vertex) {.position = cw_tri.v2  , .color = {0, 0, 255}},
+            (Vertex) {.position = ccw_tri.v0 , .color = {255, 0, 0}},
+            (Vertex) {.position = ccw_tri.v1 , .color = {0, 255, 0}},
+            (Vertex) {.position = ccw_tri.v2 , .color = {0, 0, 255}},
+        };
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 6, 0, 0, 0, 0, 0, view, persp, RenderFlags_TwoSidedRasterization);
     }
-    if(example == 2)
+    if(game_state->example == 2)
     {
         // Example 2
         // Same two triangles as before view almost the same perspective matrix but z ranges from [-1, 0] instead of
@@ -961,9 +1106,18 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
+        Vertex vertices[6] = {
+            (Vertex) {.position = cw_tri.v0  , .color = {255, 0, 0}},
+            (Vertex) {.position = cw_tri.v1  , .color = {0, 255, 0}},
+            (Vertex) {.position = cw_tri.v2  , .color = {0, 0, 255}},
+            (Vertex) {.position = ccw_tri.v0 , .color = {255, 0, 0}},
+            (Vertex) {.position = ccw_tri.v1 , .color = {0, 255, 0}},
+            (Vertex) {.position = ccw_tri.v2 , .color = {0, 0, 255}},
+        };
+        //provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_TwoSidedRasterization);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 6, 0, 0, 0, 0, 0, view, persp, RenderFlags_TwoSidedRasterization);
     }
-    if(example == 3)
+    if(game_state->example == 3)
     {
         // Example 3
         // This could be like example 1 with a camera... seems good right?
@@ -994,9 +1148,18 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles + 1, 1, view, persp, RenderFlags_Culling);
+        //provisionary_block(buffer, depth_buffer, triangles + 1, 1, view, persp, RenderFlags_Culling);
+        Vertex vertices[6] = {
+            (Vertex) {.position = cw_tri.v0  , .color = {255, 0, 0}},
+            (Vertex) {.position = cw_tri.v1  , .color = {0, 255, 0}},
+            (Vertex) {.position = cw_tri.v2  , .color = {0, 0, 255}},
+            (Vertex) {.position = ccw_tri.v0 , .color = {255, 0, 0}},
+            (Vertex) {.position = ccw_tri.v1 , .color = {0, 255, 0}},
+            (Vertex) {.position = ccw_tri.v2 , .color = {0, 0, 255}},
+        };
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 6, 0, 0, 0, 0, 0, view, persp, RenderFlags_Culling);
     }
-    if(example == 4)
+    if(game_state->example == 4)
     {
         // Example 4
         // Both CCW
@@ -1026,9 +1189,18 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_Culling);
+        Vertex vertices[6] = {
+            (Vertex) {.position = ccw_tri.v0  , .color = {255, 0, 0}},
+            (Vertex) {.position = ccw_tri.v1  , .color = {0, 255, 0}},
+            (Vertex) {.position = ccw_tri.v2  , .color = {0, 0, 255}},
+            (Vertex) {.position = ccw_tri2.v0 , .color = {255, 0, 0}},
+            (Vertex) {.position = ccw_tri2.v1 , .color = {0, 255, 0}},
+            (Vertex) {.position = ccw_tri2.v2 , .color = {0, 0, 255}},
+        };
+        //provisionary_block(buffer, depth_buffer, triangles, 2, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 6, 0, 0, 0, 0, 0, view, persp, RenderFlags_Culling);
     }
-    if(example == 5)
+    if(game_state->example == 5)
     {
         // same as example 4 but with indices
         // Both CCW
@@ -1048,9 +1220,9 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, 0, 0, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 4, indices, 6, 0, 0, 0, view, persp, RenderFlags_Culling);
     }
-    if(example == 6)
+    if(game_state->example == 6)
     {
         // same as example 5 but now with texturing
         u32 texels[4] = {
@@ -1084,9 +1256,9 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 4, indices, 6, texels, 4, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 4, indices, 6, texels, 2, 2, view, persp, RenderFlags_Culling);
     }
-    if(example == 7)
+    if(game_state->example == 7)
     {
         // Two quads side by side, each with its own 0..1 UVs, so the checker restarts on the seam.
         u32 texels[4] = {
@@ -1113,9 +1285,9 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 8, indices, 12, texels, 2, 2, view, persp, RenderFlags_Culling);
     }
-    if(example == 8)
+    if(game_state->example == 8)
     {
         // Same as example 7, but rotate the whole strip to inspect perspective-correct texture interpolation.
         u32 texels[4] = {
@@ -1148,9 +1320,9 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, 8, indices, 12, texels, 4, view, persp, RenderFlags_TwoSidedRasterization);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, 8, indices, 12, texels, 2, 2, view, persp, RenderFlags_TwoSidedRasterization);
     }
-    if(example == 9)
+    if(game_state->example == 9)
     {
         // Left strip uses perspective-correct UVs, right strip uses affine UVs.
         u32 texels[4] = {
@@ -1194,10 +1366,10 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices_perspective, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling);
-        provisionary_block2(buffer, depth_buffer, vertices_affine, 8, indices, 12, texels, 4, view, persp, RenderFlags_Culling | RenderFlags_AffineUVInterpolation);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices_perspective, 8, indices, 12, texels, 2, 2, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices_affine, 8, indices, 12, texels, 2, 2, view, persp, RenderFlags_Culling | RenderFlags_AffineUVInterpolation);
     }
-    if(example == 10)
+    if(game_state->example == 10)
     {
         // Tiled floor built from many quads. Each tile reuses the same checker UVs,
         // while the tint repeats every few tiles to make the pattern easier to read.
@@ -1237,6 +1409,7 @@ UPDATE_AND_RENDER(update_and_render)
                 f32 z0 = start_z + (f32)row * tile_depth;
                 f32 z1 = z0 + tile_depth;
                 Vec3 tint = tint_palette[(row + column) % ArrayCount(tint_palette)];
+                tint = (Vec3) {.x = 255, .y = 255, .z = 255};
 
                 vertices[vertex_cursor + 0] = (Vertex){ .position = {x0, floor_y, z0}, .color = tint, .uv = {0, 0} };
                 vertices[vertex_cursor + 1] = (Vertex){ .position = {x0, floor_y, z1}, .color = tint, .uv = {0, 1} };
@@ -1263,10 +1436,10 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 50.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        provisionary_block2(buffer, depth_buffer, vertices, floor_vertex_count, indices, floor_index_count, texels, 4, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, floor_vertex_count, indices, floor_index_count, texels, 2, 2, view, persp, RenderFlags_Culling);
     }
     char buf[200];
-    snprintf(buf, 200, "Running example: %d", example);
+    snprintf(buf, 200, "Running example: %d", game_state->example);
     draw_text(buffer, 4, 20, buf);
     {
         LONGLONG frame_time = timer_get_os_time() - frame_time_now;
@@ -1300,12 +1473,17 @@ UPDATE_AND_RENDER(update_and_render)
         snprintf(buf, 200, "camera pitch and yaw: (%.2f, %.2f)", game_state->camera.pitch, game_state->camera.yaw);
         draw_text(buffer, 4, 95, buf);
     }
-    if(example == 9)
+    if(game_state->example == 9)
     {
         draw_text(buffer, 4, 110, "Left: perspective correct | Right: affine");
     }
-    if(example == 10)
+    if(game_state->example == 10)
     {
         draw_text(buffer, 4, 110, "Tiled checker floor with repeating tint palette");
+    }
+    if(game_state->culled_triangles)
+    {
+        printf("Culled triangles: %d\n", game_state->culled_triangles); 
+        game_state->culled_triangles = 0; 
     }
 }
