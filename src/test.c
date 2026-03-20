@@ -354,7 +354,8 @@ internal void barycentric_with_edge_stepping(Params *params)
                     f32 b1 = w1 * inv_area;
                     f32 b2 = w2 * inv_area;
                     f32 inv_w_interp = b0*inv_w0 + b1*inv_w1 + b2*inv_w2;
-                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    //f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z) / inv_w_interp;
+                    f32 depth = (b0 * v0.z + b1 * v1.z + b2 * v2.z);
                     //if(depth < params->depth_buffer->data[y * params->depth_buffer->width + x])
                     if(depth < depth_row[x - x_min])
                     {
