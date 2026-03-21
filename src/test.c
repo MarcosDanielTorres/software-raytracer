@@ -24,6 +24,11 @@
 #define internal static
 
 
+#define STB_PERLIN_IMPLEMENTATION
+#include "stb_perlin.h"
+
+
+
 global Vec3 red = {255, 0, 0};
 global Vec3 green = {0, 255, 0};
 global Vec3 blue = {0, 0, 255};
@@ -87,6 +92,7 @@ struct Game_State
     Camera camera;
 
     u32 example;
+    u32 example_count;
     u32 example12_lighting_mode;
     u32 culled_triangles;
 
@@ -94,6 +100,8 @@ struct Game_State
     u32 terrain_vertices_count;
     u32 terrain_indices_count;
     u32 *terrain_indices;
+
+    Obj_Model model_f177;
 };
 
 typedef u32 Example12LightingMode;
@@ -289,7 +297,7 @@ internal void draw_text(Software_Render_Buffer *buffer, u32 x, u32 baseline, cha
             for(u32 x = 0; x < width; x++)
             {
                 u8 *source = glyph.bitmap.buffer + width * y + x;
-                #if 1
+                #if 0
                 u32 alpha = *source << 24; 
                 u32 red = *source << 16; 
                 u32 green = *source << 8; 
@@ -1200,10 +1208,18 @@ UPDATE_AND_RENDER(update_and_render)
             }
         }
 
+        // models loading
+        {
+            const char *filename = ".\\obj\\f117.obj";
+            OS_FileReadResult obj = os_file_read(arena, filename);
+            game_state->model_f177 = parse_obj(obj.data, obj.size);
+        }
+
         game_state->camera.position = (Vec3) {0.0, 0.0, 0.0};
         game_state->camera.forward = (Vec3) {0, 0, 1};
 
-        game_state->example = 13;
+        game_state->example = 14;
+        game_state->example_count = 14;
         game_state->example12_lighting_mode = Example12Lighting_Flat;
         game_memory->init = 1;
     }
@@ -1236,7 +1252,7 @@ UPDATE_AND_RENDER(update_and_render)
     {
         game_state->example--;
     }
-    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && game_state->example < 13)
+    if(input_is_key_just_pressed(input, Keys_Arrow_Right) && game_state->example < game_state->example_count)
     {
         game_state->example++;
     }
@@ -1831,6 +1847,7 @@ UPDATE_AND_RENDER(update_and_render)
             {
                 for(u32 col = 0; col < 40; col++)
                 {
+                    f32 noise = stb_perlin_noise3(col, row, 0, 0, 0, 0);
                     Vec3 offset = vec3_add(start, (Vec3) {.x = col * 0.5f, .y = 0, .z = row * 0.5f});
                     f32 x0 = offset.x;
                     f32 x1 = offset.x + 0.5f;
@@ -1840,6 +1857,11 @@ UPDATE_AND_RENDER(update_and_render)
                     Vec3 p10 = {x1, ps1_grass_height(x1, z0), z0};
                     Vec3 p01 = {x0, ps1_grass_height(x0, z1), z1};
                     Vec3 p11 = {x1, ps1_grass_height(x1, z1), z1};
+                    p00.y = stb_perlin_noise3(x0, z0, 0, 0, 0, 0);
+                    p10.y = stb_perlin_noise3(x1, z0, 0, 0, 0, 0);
+                    p01.y = stb_perlin_noise3(x0, z1, 0, 0, 0, 0);
+                    p11.y = stb_perlin_noise3(x1, z1, 0, 0, 0, 0);
+
                     Vec3 tri0_center = color_scale(vec3_add(vec3_add(p00, p10), p01), 1.0f / 3.0f);
                     Vec3 tri1_center = color_scale(vec3_add(vec3_add(p10, p11), p01), 1.0f / 3.0f);
                     Vec3 tri0_base = ps1_grass_base_color(tri0_center.x, tri0_center.z, tri0_center.y);
@@ -1877,6 +1899,50 @@ UPDATE_AND_RENDER(update_and_render)
         f32 zfar = 40.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
         provisionary_block2(game_state, buffer, depth_buffer, game_state->terrain_vertices, game_state->terrain_vertices_count, game_state->terrain_indices, game_state->terrain_indices_count, 0, 0, 0, view, persp, RenderFlags_TwoSidedRasterization);
+    }
+    if(game_state->example == 14)
+    {
+        
+        camera_handle_movement(&game_state->camera, input, dt);
+
+        Mat4 view = mat4_look_at(game_state->camera.position, vec3_add(game_state->camera.position, game_state->camera.forward), (Vec3) {0.0f, 1.0f, 0.0f});
+        f32 fov = 3.141592f / 3.0f;
+        f32 aspect = (f32)buffer->width / (f32)buffer->height;
+        f32 znear = 0.1f;
+        f32 zfar = 40.0f;
+        Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
+        Obj_Model *model = &game_state->model_f177;
+        u32 vertices_size = (model->face_count + 1) * 3;
+        Vertex *vertices = (Vertex*) malloc(sizeof(Vertex) * vertices_size);
+        Vertex *ptr = vertices;
+        for(u32 f = 0; f <= game_state->model_f177.face_count; f++)
+        {
+            Face face = model->faces[f];
+            Vec3 p0 = model->vertices[face.v[0] - 1];
+            Vec3 p1 = model->vertices[face.v[1] - 1]; 
+            Vec3 p2 = model->vertices[face.v[2] - 1];
+            //Vec2 uv0 = model->texture_coordinates[face.v[0] - 1];
+            //Vec2 uv1 = model->texture_coordinates[face.v[1] - 1]; 
+            //Vec2 uv2 = model->texture_coordinates[face.v[2] - 1];
+
+
+            *ptr++ = (Vertex) {.position = p0, .color = red};
+            *ptr++ = (Vertex) {.position = p1, .color = green};
+            *ptr++ = (Vertex) {.position = p2, .color = blue};
+
+            //Vec3 normal = {face.vn[0], face.vn[1], face.vn[2]};
+            //Vec3 uvs = {face.vt[0], face.vt[1], face.vt[2]};
+        }
+
+        // Every face is the index, so i could just upload all the vertices in the model, and then i pass the flatten faces into the indices
+        // because whats happening now is that im sending all the vertices pre-arranged without indices.
+
+        // Yeah lets try, later, with sending the vertices array as is (ie just `model->vertices`) and flatten all the faces
+        // [f for f in faces]
+
+        assert(vertices_size  == ptr - vertices);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertices_size, 0, 0, 0, 0, 0, view, persp, RenderFlags_Culling);
+        free(vertices);
     }
 
     char buf[200];
