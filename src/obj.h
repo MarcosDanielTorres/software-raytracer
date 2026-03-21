@@ -183,6 +183,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                     }break;
                     case 't':
                     {
+                        at++;
                         f32 uvs[2];
                         int i = 0;
                         while(i < 2)
@@ -193,7 +194,7 @@ Obj_Model parse_obj(char *buf, size_t size)
                             at += movement;
                             i++;
                         }
-                        model.texture_coordinates[model.texture_coordinates_count] = (Vec2){uvs[0], uvs[1]};
+                        model.texture_coordinates[model.texture_coordinates_count++] = (Vec2){uvs[0], uvs[1]};
                         at++;
                     } break;
                     default:
@@ -294,7 +295,7 @@ Obj_Model parse_obj(char *buf, size_t size)
 			} break;
 			default:
 			{
-				printf("Unrecognized symbol %c\n", *at);
+			//	printf("Unrecognized symbol %c\n", *at);
 				at++;
 			}
 		}

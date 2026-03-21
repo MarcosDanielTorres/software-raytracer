@@ -24,10 +24,11 @@
 #define internal static
 
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #define STB_PERLIN_IMPLEMENTATION
 #include "stb_perlin.h"
-
-
 
 global Vec3 red = {255, 0, 0};
 global Vec3 green = {0, 255, 0};
@@ -1154,6 +1155,7 @@ camera_handle_movement(Camera *camera, Game_Input *input, f32 dt)
 
 UPDATE_AND_RENDER(update_and_render)
 {
+    stbi_set_flip_vertically_on_load(1);
     Game_State *game_state = (Game_State*)game_memory->persistent_memory;
     font_info = game_state->font_info;
     timer_init();
@@ -1921,14 +1923,13 @@ UPDATE_AND_RENDER(update_and_render)
             Vec3 p0 = model->vertices[face.v[0] - 1];
             Vec3 p1 = model->vertices[face.v[1] - 1]; 
             Vec3 p2 = model->vertices[face.v[2] - 1];
-            //Vec2 uv0 = model->texture_coordinates[face.v[0] - 1];
-            //Vec2 uv1 = model->texture_coordinates[face.v[1] - 1]; 
-            //Vec2 uv2 = model->texture_coordinates[face.v[2] - 1];
+            Vec2 uv0 = model->texture_coordinates[face.vt[0] - 1];
+            Vec2 uv1 = model->texture_coordinates[face.vt[1] - 1]; 
+            Vec2 uv2 = model->texture_coordinates[face.vt[2] - 1];
 
-
-            *ptr++ = (Vertex) {.position = p0, .color = red};
-            *ptr++ = (Vertex) {.position = p1, .color = green};
-            *ptr++ = (Vertex) {.position = p2, .color = blue};
+            *ptr++ = (Vertex) {.position = p0, .uv = uv0, .color = white};
+            *ptr++ = (Vertex) {.position = p1, .uv = uv1, .color = white};
+            *ptr++ = (Vertex) {.position = p2, .uv = uv2, .color = white};
 
             //Vec3 normal = {face.vn[0], face.vn[1], face.vn[2]};
             //Vec3 uvs = {face.vt[0], face.vt[1], face.vt[2]};
@@ -1940,9 +1941,42 @@ UPDATE_AND_RENDER(update_and_render)
         // Yeah lets try, later, with sending the vertices array as is (ie just `model->vertices`) and flatten all the faces
         // [f for f in faces]
 
+
+        const char *filename = ".\\obj\\f117.png";
+        i32 x, y, n;
+        u8 *data = stbi_load(filename, &x, &y, &n, 0);
+
+        assert(n == 4);
+
+        u32 *texture_data = malloc(n * y * x);
+        u32 *dest = texture_data;
+        for(u32 i = 0; i < n * y * x; i+=n)
+        {
+#if 0
+            u8 a = data[i];
+            u8 r = data[i + 1];
+            u8 g = data[i + 2];
+            u8 b = data[i + 3];
+#else
+            u8 r = data[i];
+            u8 g = data[i + 1];
+            u8 b = data[i + 2];
+            u8 a = data[i + 3];
+
+#endif
+
+            u32 result = 0;
+            result |= a << 24;
+            result |= r << 16;
+            result |= g << 8;
+            result |= b << 0;
+            *dest++ = result;
+        }
+
         assert(vertices_size  == ptr - vertices);
-        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertices_size, 0, 0, 0, 0, 0, view, persp, RenderFlags_Culling);
+        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertices_size, 0, 0, texture_data, x, y, view, persp, RenderFlags_Culling);
         free(vertices);
+        free(texture_data);
     }
 
     char buf[200];
