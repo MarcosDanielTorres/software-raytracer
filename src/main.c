@@ -20,8 +20,8 @@ global Arena *arena;
 
 static b32 g_running = 1;
 static b32 g_window_is_active = 0;
-static HWND hwnd;
-static HDC hdc;
+
+global OS_W32_Window *window;
 
 global Software_Render_Buffer *buffer;
 global Software_Depth_Buffer *depth_buffer;
@@ -190,7 +190,7 @@ void win32_process_pending_msgs(Game_Input *input)
                 // GLFW does this, but im not sure if it makes sense for my usecase! Also they dont do it here
                 // recenter cursor center re center
                 //POINT center = { LONG(SRC_WIDTH)/2, LONG(SRC_HEIGHT)/2 };
-                //ClientToScreen(global_w32_window.handle, &center);
+                //ClientToScreen(handle, &center);
                 //SetCursorPos(center.x, center.y);
 
             } break;
@@ -234,7 +234,7 @@ int main ()
 {
     timer_init();
     arena = arena_alloc(mb(2));
-    g_transient_arena = arena_alloc(mb(10));
+    g_transient_arena = arena_alloc(mb(2));
     // 4:3 resolutions
     // 320 x 240
     // 640 x 480    (VGA)
@@ -294,7 +294,7 @@ int main ()
         window_rect.top = CW_USEDEFAULT;
     }
 
-    hwnd = CreateWindowExW(
+    HWND hwnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         L"graphical-window",
         L"My window!",
@@ -308,11 +308,14 @@ int main ()
         printf("error code: %d\n", GetLastError());
         return 0;
     }
-    ShowWindow(hwnd, SW_SHOW);
-    hdc = GetDC(hwnd);
+    window = (OS_W32_Window*) VirtualAlloc(0, sizeof(OS_W32_Window), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    window->hdc = GetDC(hwnd);
+    window->hwnd = hwnd;
+    window->window_placement.length = sizeof(WINDOWPLACEMENT);
+    os_win32_toggle_fullscreen(hwnd, &window->window_placement);
+
+    ShowWindow(window->hwnd, SW_SHOW);
     g_window_is_active = (GetForegroundWindow() == hwnd);
-    OS_W32_Window window = {0};
-    window.hwnd = hwnd;
 
 
     buffer = VirtualAlloc(0, sizeof(Software_Render_Buffer), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -363,7 +366,7 @@ int main ()
     rid.usUsagePage = 0x01;
     rid.usUsage = 0x02;
     rid.dwFlags = 0;
-    rid.hwndTarget = window.hwnd;
+    rid.hwndTarget = window->hwnd;
     if(!RegisterRawInputDevices(&rid, 1, sizeof(rid)))
     {
         printf("RegisterRawInputDevices failed: %lu\n", GetLastError());
@@ -412,7 +415,7 @@ int main ()
         //StretchDIBits(hdc, 0, 0, buffer->width, buffer->height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
 
         //LONGLONG stretch_now = timer_get_os_time();
-        StretchDIBits(hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
+        StretchDIBits(window->hdc, 0, 0, window_width, window_height, 0, 0, buffer->width, buffer->height, (void*) buffer->data, &buffer->info, DIB_RGB_COLORS, SRCCOPY);
         //LONGLONG stretch_last = timer_get_os_time();
         //printf("StretchDIBits time: %.2fms\n", timer_os_time_to_ms(stretch_last - stretch_now));
         input_update(&input);

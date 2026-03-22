@@ -24,6 +24,7 @@ struct OS_W32_Window
     OS_W32_Window *prev;
     HWND hwnd;
     HDC hdc;
+    WINDOWPLACEMENT window_placement;
 };
 
 // --- win32 ---

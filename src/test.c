@@ -8,8 +8,10 @@
 #include "base_arena.c"
 #include "os_win32.c"
 #include "base_math.h"
+#include "utils.h"
 #include "timer.c"
 #include "obj.h"
+#include "obj.c"
 #include <assert.h>
 #include <emmintrin.h>
 #include <immintrin.h>
@@ -30,11 +32,7 @@
 #define STB_PERLIN_IMPLEMENTATION
 #include "stb_perlin.h"
 
-global Vec3 red = {255, 0, 0};
-global Vec3 green = {0, 255, 0};
-global Vec3 blue = {0, 0, 255};
-global Vec3 white = {255, 255, 255};
-global Vec3 yellow = {255, 255, 0};
+
 typedef struct Camera Camera;
 struct Camera
 {
@@ -84,7 +82,14 @@ struct FontInfo
     FontGlyph font_table[300];
 };
 
-typedef struct Vertex Vertex;
+
+
+typedef struct Entity Entity;
+struct Entity
+{
+    Mesh mesh;
+};
+
 typedef struct Game_State Game_State;
 struct Game_State
 {
@@ -101,8 +106,10 @@ struct Game_State
     u32 terrain_vertices_count;
     u32 terrain_indices_count;
     u32 *terrain_indices;
-
-    Obj_Model model_f177;
+    
+    Mesh mesh_f117;
+    Mesh mesh_efa;
+    Mesh mesh_f22;
 };
 
 typedef u32 Example12LightingMode;
@@ -664,13 +671,6 @@ void provisionary_block(Software_Render_Buffer *buffer, Software_Depth_Buffer *d
     }
 }
 
-typedef struct Vertex Vertex;
-struct Vertex
-{
-    Vec3 position;
-    Vec3 color;
-    Vec2 uv;
-};
 
 internal void
 push_triangle(Vertex *vertices, u32 max_vertices, u32 *vertex_count,
@@ -1163,6 +1163,7 @@ UPDATE_AND_RENDER(update_and_render)
     {
         printf("init\n");
         game_state->arena = arena_alloc_with_base(game_memory->persistent_memory_size - sizeof(Game_State), (u8*)game_memory->persistent_memory + sizeof(Game_State));
+        g_transient_arena = arena_alloc_with_base(game_memory->transient_memory_size, (u8*)game_memory->transient_memory);
         Arena *arena = game_state->arena;
 
         {
@@ -1212,19 +1213,109 @@ UPDATE_AND_RENDER(update_and_render)
 
         // models loading
         {
-            const char *filename = ".\\obj\\f117.obj";
-            OS_FileReadResult obj = os_file_read(arena, filename);
-            game_state->model_f177 = parse_obj(obj.data, obj.size);
+            OS_FileReadResult obj = os_file_read(arena, ".\\obj\\f22\\f22.obj");
+            Obj_Model model = parse_obj(obj.data, obj.size);
+            game_state->mesh_f22 = obj_build_mesh(game_state->arena, model);
+            
+            i32 x, y, n;
+            u8 *data = stbi_load(".\\obj\\f22\\f22.png", &x, &y, &n, 0);
+
+            assert(n == 4);
+
+            u32 *texture_data = malloc(n * y * x);
+            u32 *dest = texture_data;
+            for(u32 i = 0; i < n * y * x; i+=n)
+            {
+                u8 r = data[i];
+                u8 g = data[i + 1];
+                u8 b = data[i + 2];
+                u8 a = data[i + 3];
+
+                u32 result = 0;
+                result |= a << 24;
+                result |= r << 16;
+                result |= g << 8;
+                result |= b << 0;
+                *dest++ = result;
+            }
+            game_state->mesh_f22.texture_data = texture_data;
+            game_state->mesh_f22.texture_width = x;
+            game_state->mesh_f22.texture_height = y;
+        }
+        {
+            OS_FileReadResult obj = os_file_read(arena, ".\\obj\\efa\\efa.obj");
+            Obj_Model model = parse_obj(obj.data, obj.size);
+            game_state->mesh_efa = obj_build_mesh(game_state->arena, model);
+            i32 x, y, n;
+            u8 *data = stbi_load(".\\obj\\efa\\efa.png", &x, &y, &n, 0);
+
+            assert(n == 4);
+
+            u32 *texture_data = malloc(n * y * x);
+            u32 *dest = texture_data;
+            for(u32 i = 0; i < n * y * x; i+=n)
+            {
+                u8 r = data[i];
+                u8 g = data[i + 1];
+                u8 b = data[i + 2];
+                u8 a = data[i + 3];
+
+                u32 result = 0;
+                result |= a << 24;
+                result |= r << 16;
+                result |= g << 8;
+                result |= b << 0;
+                *dest++ = result;
+            }
+            game_state->mesh_efa.texture_data = texture_data;
+            game_state->mesh_efa.texture_width = x;
+            game_state->mesh_efa.texture_height = y;
+        }
+        {
+            OS_FileReadResult obj = os_file_read(arena, ".\\obj\\f117\\f117.obj");
+            Obj_Model model = parse_obj(obj.data, obj.size);
+            game_state->mesh_f117 = obj_build_mesh(game_state->arena, model);
+            i32 x, y, n;
+            u8 *data = stbi_load(".\\obj\\f117\\f117.png", &x, &y, &n, 0);
+
+            assert(n == 4);
+
+            u32 *texture_data = malloc(n * y * x);
+            u32 *dest = texture_data;
+            for(u32 i = 0; i < n * y * x; i+=n)
+            {
+                u8 r = data[i];
+                u8 g = data[i + 1];
+                u8 b = data[i + 2];
+                u8 a = data[i + 3];
+
+                u32 result = 0;
+                result |= a << 24;
+                result |= r << 16;
+                result |= g << 8;
+                result |= b << 0;
+                *dest++ = result;
+            }
+            game_state->mesh_f117.texture_data = texture_data;
+            game_state->mesh_f117.texture_width = x;
+            game_state->mesh_f117.texture_height = y;
         }
 
-        game_state->camera.position = (Vec3) {0.0, 0.0, 0.0};
+
+        game_state->camera.position = (Vec3) {1.79, -1.53, -2.58};
+        game_state->camera.pitch = -0.39;
+        game_state->camera.yaw = -0.46;
         game_state->camera.forward = (Vec3) {0, 0, 1};
 
         game_state->example = 14;
         game_state->example_count = 14;
         game_state->example12_lighting_mode = Example12Lighting_Flat;
+
+
+
         game_memory->init = 1;
     }
+
     LONGLONG frame_time_now = timer_get_os_time();
     u32 steam_chat_background_color = 0xff1e2025;
     clear_screen(buffer, steam_chat_background_color);
@@ -1913,70 +2004,16 @@ UPDATE_AND_RENDER(update_and_render)
         f32 znear = 0.1f;
         f32 zfar = 40.0f;
         Mat4 persp = mat4_make_perspective(fov, aspect, znear, zfar);
-        Obj_Model *model = &game_state->model_f177;
-        u32 vertices_size = (model->face_count + 1) * 3;
-        Vertex *vertices = (Vertex*) malloc(sizeof(Vertex) * vertices_size);
-        Vertex *ptr = vertices;
-        for(u32 f = 0; f <= game_state->model_f177.face_count; f++)
-        {
-            Face face = model->faces[f];
-            Vec3 p0 = model->vertices[face.v[0] - 1];
-            Vec3 p1 = model->vertices[face.v[1] - 1]; 
-            Vec3 p2 = model->vertices[face.v[2] - 1];
-            Vec2 uv0 = model->texture_coordinates[face.vt[0] - 1];
-            Vec2 uv1 = model->texture_coordinates[face.vt[1] - 1]; 
-            Vec2 uv2 = model->texture_coordinates[face.vt[2] - 1];
+        Mesh *mesh = &game_state->mesh_f117;
+        mesh = &game_state->mesh_f117;
+        mesh = &game_state->mesh_efa;
+        mesh = &game_state->mesh_f22;
 
-            *ptr++ = (Vertex) {.position = p0, .uv = uv0, .color = white};
-            *ptr++ = (Vertex) {.position = p1, .uv = uv1, .color = white};
-            *ptr++ = (Vertex) {.position = p2, .uv = uv2, .color = white};
-
-            //Vec3 normal = {face.vn[0], face.vn[1], face.vn[2]};
-            //Vec3 uvs = {face.vt[0], face.vt[1], face.vt[2]};
-        }
-
-        // Every face is the index, so i could just upload all the vertices in the model, and then i pass the flatten faces into the indices
-        // because whats happening now is that im sending all the vertices pre-arranged without indices.
-
-        // Yeah lets try, later, with sending the vertices array as is (ie just `model->vertices`) and flatten all the faces
-        // [f for f in faces]
-
-
-        const char *filename = ".\\obj\\f117.png";
-        i32 x, y, n;
-        u8 *data = stbi_load(filename, &x, &y, &n, 0);
-
-        assert(n == 4);
-
-        u32 *texture_data = malloc(n * y * x);
-        u32 *dest = texture_data;
-        for(u32 i = 0; i < n * y * x; i+=n)
-        {
-#if 0
-            u8 a = data[i];
-            u8 r = data[i + 1];
-            u8 g = data[i + 2];
-            u8 b = data[i + 3];
-#else
-            u8 r = data[i];
-            u8 g = data[i + 1];
-            u8 b = data[i + 2];
-            u8 a = data[i + 3];
-
-#endif
-
-            u32 result = 0;
-            result |= a << 24;
-            result |= r << 16;
-            result |= g << 8;
-            result |= b << 0;
-            *dest++ = result;
-        }
-
-        assert(vertices_size  == ptr - vertices);
-        provisionary_block2(game_state, buffer, depth_buffer, vertices, vertices_size, 0, 0, texture_data, x, y, view, persp, RenderFlags_Culling);
-        free(vertices);
-        free(texture_data);
+        //printf("Rendering vertices: %d , indices: %d\n", mesh->vertices_count, mesh->indices_count);
+        provisionary_block2(game_state, buffer, depth_buffer,
+            mesh->vertices, mesh->vertices_count, mesh->indices, mesh->indices_count, mesh->texture_data, mesh->texture_width, mesh->texture_height,
+            view, persp, 
+            0);
     }
 
     char buf[200];
@@ -2034,7 +2071,7 @@ UPDATE_AND_RENDER(update_and_render)
     }
     if(game_state->culled_triangles)
     {
-        printf("Culled triangles: %d\n", game_state->culled_triangles); 
+        //printf("Culled triangles: %d\n", game_state->culled_triangles); 
         game_state->culled_triangles = 0; 
     }
 }

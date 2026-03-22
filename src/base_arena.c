@@ -15,6 +15,7 @@ arena_alloc(size_t size)
     arena->temp_count = 0;
     return arena;
 }
+
 internal Arena *
 arena_alloc_with_base(size_t size, u8* base)
 {

@@ -61,6 +61,35 @@ win32_unclip_cursor(void)
     ClipCursor(0);
 }
 
+internal void os_win32_toggle_fullscreen(HWND handle, WINDOWPLACEMENT *window_placement) 
+{
+  DWORD window_style = GetWindowLong(handle, GWL_STYLE);
+  if (window_style & WS_OVERLAPPEDWINDOW) 
+  {
+    // if not fullscreen
+    MONITORINFO monitor_info = {sizeof(MONITORINFO)};
+    if(GetWindowPlacement(handle, window_placement) && 
+        GetMonitorInfo(MonitorFromWindow(handle, MONITOR_DEFAULTTOPRIMARY), &monitor_info))
+    {
+      SetWindowLong(handle, GWL_STYLE, window_style & ~WS_OVERLAPPEDWINDOW);
+      SetWindowPos(handle, HWND_TOP,
+                   monitor_info.rcMonitor.left,
+                   monitor_info.rcMonitor.top,
+                   monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                   monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                   SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+  }
+  else
+  {
+    SetWindowLong(handle, GWL_STYLE, window_style | WS_OVERLAPPEDWINDOW);
+    SetWindowPlacement(handle, window_placement);
+    SetWindowPos(handle, 0, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+  }
+}
+
 // TODO dont like the name of this because its tighly couple to the implmentation. Is not a generic load of a DLL. Which maybe it shouldnt be
 // I think i could have a load dll function but there must be a different load-specifc_case dll to account for other things
 // probably its best to remove this function from the os layer!
